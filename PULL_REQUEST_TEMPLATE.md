@@ -1,12 +1,12 @@
 ## Description
 
-:firecracker: **Delete me**: Describe the changes in this PR. Please explicitly note any breaking changes.
+Delete me: Describe the changes in this PR. Please explicitly note any breaking changes.
 
 **Jira**: <https://jira.macuject.com/[ID]>
 
 ## Screenshots / Videos
 
-:firecracker: **Delete me**: If applicable, add screenshots to help explain this PR's changes. If not needed delete this entire section.`
+Delete me: If applicable, add screenshots to help explain this PR's changes. If not needed delete this entire section.`
 
 | Type         | Before | After |
 | ------------ | ------ | ----- |
@@ -15,15 +15,15 @@
 
 ## Data
 
-:firecracker: **Delete me**: Does this PR require database, data migration or data flow change? Describe the changes required and testing undertaken. If not needed delete this entire section.
+Delete me: Does this PR require database, data migration or data flow change? Describe the changes required and testing undertaken. If not needed delete this entire section.
 
 ## Security
 
-:firecracker: **Delete me**: Does this PR modify any aspects of our security posture? If so, please describe the security changes, discussions had with the Macuject Information Security Officer, and the testing undertaken. If not needed delete this entire section.
+Delete me: Does this PR modify any aspects of our security posture? If so, please describe the security changes, discussions had with the Macuject Information Security Officer, and the testing undertaken. If not needed delete this entire section.
 
 ## Jobs (Cron, Lambda etc)
 
-:firecracker: **Delete me**: Does this PR add/update/remove anything that is considered a 'job' e.g. Lambda or Cron (but explicitly not DelayedJob as this is managed entirely within the web application). If so please describe the job and undertake the platform teams [automated job process][job process]. If not needed delete this entire section.
+Delete me: Does this PR add/update/remove anything that is considered a 'job' e.g. Lambda or Cron (but explicitly not DelayedJob as this is managed entirely within the web application). If so please describe the job and undertake the platform teams [automated job process][job process]. If not needed delete this entire section.
 
 ## Impact Assessment
 
