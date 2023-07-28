@@ -6,7 +6,7 @@
 
 ## Screenshots / Videos
 
-**Delete me**: If applicable, add screenshots to help explain this PR's changes. If not needed delete this entire section.`
+:firecracker: **Delete me**: If applicable, add screenshots to help explain this PR's changes. If not needed delete this entire section.`
 
 | Type         | Before | After |
 | ------------ | ------ | ----- |
