@@ -78,6 +78,7 @@ jobs:
           labels: ${{ inputs.labels }}
           assignee: ${{ steps.get_assignee.outputs.assignee }}
           releaseBranches: ${{ steps.get_release_branch_names.outputs.release_branches }}
+          githubJiraUserMap: ${{ vars.GH_JIRA_USER_MAP }}
 
       - name: Log created issue
         run: echo "Issue ${{ steps.create.outputs.issue }} was created"
