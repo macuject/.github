@@ -105,3 +105,10 @@ jobs:
             --title "${{ steps.create.outputs.issue }}: ${{ github.event.pull_request.title }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add Jira issue link as comment on PR
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "Associated Jira issue: https://macuject.atlassian.net/browse/${{ steps.create.outputs.issue }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
