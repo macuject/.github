@@ -33,7 +33,7 @@ on:
 
 jobs:
   create_jira_issue_for_dependabot_pr:
-    if: github.actor != 'dependabot[bot]' # TODO: Change to == after initial testing
+    if: github.actor == 'dependabot[bot]' || github.event.label.name == 'process-existing-pr'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
