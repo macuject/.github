@@ -2,6 +2,13 @@ name: Update Jira Issue
 
 on:
   workflow_call:
+    secrets:
+      JIRA_BASE_URL:
+        required: true
+      JIRA_USER_EMAIL:
+        required: true
+      JIRA_API_TOKEN:
+        required: true
 
 jobs:
   transition_dependabot_issue_to_done_on_pr_merge:
