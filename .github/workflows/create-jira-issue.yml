@@ -33,7 +33,9 @@ on:
 
 jobs:
   create_jira_issue_for_dependabot_pr:
-    if: github.actor == 'dependabot[bot]' || github.event.label.name == 'process-existing-pr'
+    if: >- # Specificity is important here to avoid triggering this action multiple times when Dependabot creates then labels a PR
+      (github.actor == 'dependabot[bot]' && github.event_name == 'pull_request' && github.event.action == 'opened') ||
+      (github.actor != 'dependabot[bot]' && github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'process-existing-pr')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
