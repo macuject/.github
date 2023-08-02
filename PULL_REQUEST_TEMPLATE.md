@@ -2,7 +2,7 @@
 
 `Delete me: Describe the changes in this PR. Please explicitly note any breaking changes.`
 
-**Jira**: <https://jira.macuject.com/[ID]>
+**Jira**: https://macuject.atlassian.net/browse/[ID]
 
 ## Screenshots / Videos
 
