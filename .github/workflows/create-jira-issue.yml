@@ -88,6 +88,12 @@ jobs:
           releaseBranches: ${{ steps.get_release_branch_names.outputs.release_branches }}
           githubJiraUserMap: ${{ vars.GH_JIRA_USER_MAP }}
 
+      - name: Transition Jira issue to In Review
+        uses: atlassian/gajira-transition@v3
+        with:
+          issue: ${{ steps.create.outputs.issue }}
+          transition: In Review
+
       - name: Log created issue
         run: echo "Issue ${{ steps.create.outputs.issue }} was created"
 
