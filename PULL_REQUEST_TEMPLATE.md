@@ -1,8 +1,12 @@
+**Jira**: https://macuject.atlassian.net/browse/[ID]
+
 ## Description
 
-Delete me: Describe the changes in this PR. Please explicitly note any breaking changes.
+Delete me: Describe the changes in this PR.
 
-**Jira**: https://macuject.atlassian.net/browse/[ID]
+### Breaking Changes
+
+Delete me: If applicable, describe any breaking changes. If not needed delete this entire section.
 
 ## Screenshots / Videos
 
