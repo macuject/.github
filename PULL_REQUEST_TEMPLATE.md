@@ -13,6 +13,10 @@ Delete me: If applicable, add screenshots to help explain this PR's changes. If 
 | Wide screen  | IMG    | IMG   |
 | Small screen | IMG    | IMG   |
 
+## UAT
+
+Delete me: Does this PR require UAT e.g. by the product or medical team? If so, please describe the testing required and undertaken. If not needed delete this entire section.
+
 ## Data
 
 Delete me: Does this PR require database, data migration or data flow change? Describe the changes required and testing undertaken. If not needed delete this entire section.
@@ -46,6 +50,7 @@ I've considered all of the following and added to the proposed changes where rel
 I've considered all of the following and added details to the PR description where relevant:
 
 - [ ] Breaking changes
+- [ ] UAT guidance
 - [ ] Data related changes
 - [ ] Job(s) have been described and a [PR opened][job process] for the platform team to review
 - [ ] Security changes. This also requires the Macuject Information Security Officer to be added to this PR as an additional reviewer.
