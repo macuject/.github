@@ -40,8 +40,9 @@ As part of our ongoing commitment to maintaining compliance with SOC 2 and HIPAA
 - **High**: Potential for significant harm to sensitive data or user access, and material adverse impact on Macuject's operations or reputation.
 - **Medium**: Potential for moderate harm to sensitive data or user access, and adverse impact on Macuject's operations or reputation.
 - **Low**: Unlikely to result in significant harm to sensitive data or user access, and no expected material adverse impact on Macujects's operations or reputation.
+- **None**: Changes that are not relevant to the impact assessment process. Changes will not be used in production by Macuject customers and are related to internal tooling, documentation, or other non-production systems.
 
-**Impact Assessment for this PR**: [High/Medium/Low]
+**Impact Assessment for this PR**: [High/Medium/Low/None]
 
 ## Checklist
 
