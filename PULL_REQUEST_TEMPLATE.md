@@ -35,11 +35,11 @@ Delete me: Does this PR add/update/remove anything that is considered a 'job' e.
 
 ## Impact Assessment
 
-As part of our ongoing commitment to maintaining compliance with SOC 2 and HIPAA regulations, each proposed change should have an impact assessment undertaken. A summary is provided and full details can be found within our [impact assessment] documentation.
+As part of our ongoing commitment to maintaining compliance with SOC 2 and HIPAA regulations, each proposed change should have an impact assessment undertaken. Our [impact assessment] documentation contains a summary and complete details.
 
-- **High**: Potential for significant harm to sensitive data or user access, and material adverse impact on Macuject's operations or reputation.
-- **Medium**: Potential for moderate harm to sensitive data or user access, and adverse impact on Macuject's operations or reputation.
-- **Low**: Unlikely to result in significant harm to sensitive data or user access, and no expected material adverse impact on Macujects's operations or reputation.
+- **High**: Potential for significant harm to sensitive data or user access and material adverse impact on Macuject's operations or reputation.
+- **Medium**: Potential for moderate harm to sensitive data or user access and adverse impact on Macuject's operations or reputation.
+- **Low**: Unlikely to significantly harm sensitive data or user access, and no expected material adverse impact on Macujects's operations or reputation.
 - **None**: Changes that are not relevant to the impact assessment process. Changes will not be used in production by Macuject customers and are related to internal tooling, documentation, or other non-production systems.
 
 **Impact Assessment for this PR**: [High/Medium/Low/None]
@@ -56,7 +56,7 @@ I've considered all of the following and added details to the PR description whe
 
 - [ ] Breaking changes
 - [ ] UAT guidance
-- [ ] Data related changes
+- [ ] Data-related changes
 - [ ] Job(s) have been described and a [PR opened][job process] for the platform team to review
 - [ ] Security changes. This also requires the Macuject Information Security Officer to be added to this PR as an additional reviewer.
 
