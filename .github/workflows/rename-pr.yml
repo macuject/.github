@@ -1,0 +1,86 @@
+name: PR
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: 'Jira project key'
+        required: true
+        type: string
+
+jobs:
+  Rename: # When a PR is opened, check the name is prepended with Jira issue number & update if needed
+    runs-on: ubuntu-latest
+    steps:
+      # Run this rather than just skipping the whole job, so that we see a green tick in the PR checks
+      - name: Skip remaining steps if PR authored by Dependabot
+        if: github.event.pull_request.user.login == 'dependabot[bot]'
+        id: skip
+        run: echo "Run not needed for this PR, skipping remaining steps"
+
+      # Run script to extract Jira issue key from PR branch name
+      # & check if PR title starts with Jira issue key
+      - name: Checkout code from macuject/.github repo
+        if: steps.skip.outcome == 'skipped'
+        uses: actions/checkout@v3
+        with:
+          repository: macuject/.github
+          path: reusable
+
+      - name: Setup Node.js
+        if: steps.skip.outcome == 'skipped'
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        if: steps.skip.outcome == 'skipped'
+        run: npm install dotenv
+
+      - name: Run script
+        if: steps.skip.outcome == 'skipped'
+        id: run_script
+        run: node reusable/.github/workflows/check-issue-key.js
+        env:
+          BRANCH_NAME: ${{ github.event.pull_request.head.ref }}
+          PROJECT_KEY: ${{ inputs.project }}
+          CURRENT_PR_TITLE: ${{ github.event.pull_request.title }}
+
+      # If steps.run_script.outputs.jira_issue_key = '', exit with failure
+      - name: Exit with failure if Jira issue key not found
+        if: >-
+          steps.skip.outcome == 'skipped' &&
+          steps.run_script.outputs.jira_issue_key == ''
+        run: |
+          echo "ERROR: Jira issue key not found in PR branch name."
+          echo "Branches must be named with the Jira issue key at the start."
+          echo "For example: WA-42/my-branch-name"
+          exit 1
+
+      # If steps.run_script.outputs.pr_title_starts_with_other_issue_key = 'true', exit with failure
+      - name: Exit with failure if PR title starts with Jira issue key that doesn't match PR branch name
+        if: >-
+          steps.skip.outcome == 'skipped' &&
+          steps.run_script.outputs.pr_title_starts_with_other_issue_key == 'true'
+        run: |
+          echo "ERROR: PR title starts with Jira issue key(s) that doesn't/don't match PR branch name."
+          exit 1
+
+      # If previous steps haven't exited with failure, & PR title doesn't start with Jira issue key, rename PR
+      - name: Checkout code from current repo
+        if: >-
+          steps.skip.outcome == 'skipped' &&
+          steps.run_script.outputs.pr_title_starts_with_issue_key == 'false'
+        uses: actions/checkout@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rename PR
+        if: >-
+          steps.skip.outcome == 'skipped' &&
+          steps.run_script.outputs.pr_title_starts_with_issue_key == 'false'
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --title "${{ steps.run_script.outputs.jira_issue_key }}: ${{ github.event.pull_request.title }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
