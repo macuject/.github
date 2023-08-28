@@ -71,7 +71,7 @@ jobs:
         run: npm install node-fetch
 
       - name: Run script
-        run: node reusable/.github/workflows/release-versions.js
+        run: node reusable/.github/workflows/release-version.mjs
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
@@ -105,7 +105,7 @@ jobs:
         run: npm install node-fetch dotenv
 
       - name: Run script
-        run: node reusable/.github/workflows/comment-on-jira-issue.js
+        run: node reusable/.github/workflows/comment-on-jira-issue.mjs
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
