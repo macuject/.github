@@ -6,6 +6,7 @@ const ISSUE_KEY = process.env.ISSUE_KEY;
 const PROJECT_KEY = process.env.PROJECT_KEY;
 const JIRA_USER_EMAIL = process.env.JIRA_USER_EMAIL;
 const JIRA_API_TOKEN = process.env.JIRA_API_TOKEN;
+const PR_BASE_BRANCH = process.env.PR_BASE_BRANCH;
 let github_release_branches = process.env.GITHUB_RELEASE_BRANCHES;
 
 import fetch from 'node-fetch';
@@ -61,8 +62,8 @@ const fetchAndCompare = async () => {
 
     // return early if (currentFixVersionNames.length > 1)
     if (currentFixVersionNames.length > 1) {
-      console.log('More than one fixVersion assigned to issue. This shouldn\'t be the case. Unclear how to proceed, so returning early.');
-      return;
+      console.error('More than one fixVersion assigned to issue. This shouldn\'t be the case. Unclear how to proceed, so returning early.');
+      process.exit(1);
     } else {
       predictedFixVersion = currentFixVersionNames[0];
     }
@@ -70,23 +71,40 @@ const fetchAndCompare = async () => {
     let allJiraFixVersions = await fetchAllJiraFixVersions();
     allJiraFixVersions = sortVersionsDescending(allJiraFixVersions).reverse();
 
-    // Get the release branch numbers from the Github release branches
-    github_release_branches = github_release_branches.split(',').map(item => {
-      return item.trim().substring(item.length - 5);
-    })
-    const githubReleaseBranchNumbers = sortVersionsDescending(github_release_branches);
+    let correctFixVersion = null;
+    // If the base branch is a release branch with a matching Jira fixVersion, use the release branch number as the correct fixVersion
+    if (PR_BASE_BRANCH.includes('release')) {
+      const releaseBranchNumber = PR_BASE_BRANCH.match(/\d+\.\d+\.\d+$/)[0];
+      if (allJiraFixVersions.includes(releaseBranchNumber)) {
+        correctFixVersion = releaseBranchNumber;
+        console.log('Base branch is a release branch with a matching Jira fixVersion. Using the release branch number as the correct fixVersion.')
+        console.log('Currently assigned fixVersion:', predictedFixVersion);
+        console.log('Correct fixVersion:', correctFixVersion);
+      } else {
+        console.log('Release branch number:', releaseBranchNumber)
+        console.log('All Jira fixVersions in the project:', allJiraFixVersions);
+        console.error('Release branch number not found in Jira fixVersions. Unclear how to proceed, so returning early.');
+        process.exit(1);
+      }
+    }  else {
+      // Get the release branch numbers from the Github release branches
+      github_release_branches = github_release_branches.split(',').map(item => {
+        return item.trim().substring(item.length - 5);
+      })
+      const githubReleaseBranchNumbers = sortVersionsDescending(github_release_branches);
 
-    console.log('All fixVersions in the project:', allJiraFixVersions);
-    console.log('Github release branches:', githubReleaseBranchNumbers);
+      console.log('All fixVersions in the project:', allJiraFixVersions);
+      console.log('Github release branches:', githubReleaseBranchNumbers);
 
-    console.log('Currently assigned fixVersion:', predictedFixVersion);
+      console.log('Currently assigned fixVersion:', predictedFixVersion);
 
-    // Get the highest release branch number
-    let highestReleaseBranchNum = githubReleaseBranchNumbers[0];
+      // Get the highest release branch number
+      let highestReleaseBranchNum = githubReleaseBranchNumbers[0];
 
-    // Find the lowest Jira version number that is higher than the highest release branch number
-    const correctFixVersion = allJiraFixVersions.find(item => item > highestReleaseBranchNum)
-    console.log('Correct fixVersion:', correctFixVersion);
+      // Find the lowest Jira version number that is higher than the highest release branch number
+      correctFixVersion = allJiraFixVersions.find(item => item > highestReleaseBranchNum)
+      console.log('Correct fixVersion:', correctFixVersion);
+    }
 
     // If the correct fixVersion is not the same as the currently assigned fixVersion, update the issue
     if (predictedFixVersion !== correctFixVersion) {
@@ -117,13 +135,15 @@ const fetchAndCompare = async () => {
 
       // Check the response status
       if (response.status === 204) { // Check for the appropriate successful status code here
-        console.log("Issue updated with fixVersion:", correctFixVersion);
+        console.log("✅ Issue updated with fixVersion:", correctFixVersion);
       } else {
         console.error("Error updating fixVersion", await response.text());
+        process.exit(1);
       }
     }
   } catch (err) {
     console.error(err);
+    process.exit(1);
   }
 };
 
