@@ -98,7 +98,7 @@ jobs:
       - name: Validate pull request title
         id: validate_pr_title
         run: |
-          if [[ "${{ github.event.pull_request.title }}" =~ ^\[?([A-Z]{2,4}-\d{2,5}(,\s)?)+\]?:|^([A-Z]{2,4}-\d{2,5}): ]]; then
+          if [[ "${{ github.event.pull_request.title }}" =~ ^\[?([A-Z]{2,4}-[0-9]{2,5}(,\s)?)+\]?:|^([A-Z]{2,4}-[0-9]{2,5}): ]]; then
             echo "PR title is valid"
           else
             echo "Invalid PR title format. It should start with a Jira issue key."
