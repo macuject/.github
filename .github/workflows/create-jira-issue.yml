@@ -66,7 +66,7 @@ jobs:
         uses: dc-ag/auto-assign-reviewers-from-team@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          read-token: ${{ secrets.READ_ONLY_ORG_TEAM_MEMBERS }} # Read only token which needs access to fetch team members
+          admin-repo-token: ${{ secrets.READ_ONLY_ORG_TEAM_MEMBERS }} # GitHub Personal Access Token that has 'repo' rights
           team: ${{ inputs.github_team }}
           amount: 1 # Amount of reviewers to assign
 
