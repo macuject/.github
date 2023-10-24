@@ -69,6 +69,8 @@ jobs:
           admin-repo-token: ${{ secrets.READ_ONLY_ORG_TEAM_MEMBERS }} # GitHub Personal Access Token that has 'repo' rights
           team: ${{ inputs.github_team }}
           amount: 1 # Amount of reviewers to assign
+          use-team-reviewer-settings: false # Set to true if you want to use the team's reviewer settings instead of a specific amount
+          ignore-branches-regex: "" # Regex to check branches. If matched the PR won't be assigned any reviewers via this workflow
 
       - name: Get PR reviewer # To be used to assign Jira issue to the same person
         if: steps.skip.outcome == 'skipped'
