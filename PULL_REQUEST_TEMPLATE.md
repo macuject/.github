@@ -4,10 +4,6 @@
 
 Delete me: Describe the changes in this PR.
 
-### Breaking Changes
-
-Delete me: If applicable, describe any breaking changes. If not needed delete this entire section.
-
 ## Screenshots / Videos
 
 Delete me: If applicable, add screenshots to help explain this PR's changes. If not needed delete this entire section.`
@@ -17,19 +13,25 @@ Delete me: If applicable, add screenshots to help explain this PR's changes. If 
 | Wide screen  | IMG    | IMG   |
 | Small screen | IMG    | IMG   |
 
-## UAT
+## Breaking Changes
 
-Delete me: Does this PR require UAT e.g. by the product or medical team? If so, please describe the testing required and undertaken. If not needed delete this entire section.
-
-## Data
-
-Delete me: Does this PR require database, data migration or data flow change? Describe the changes required and testing undertaken. If not needed delete this entire section.
+Delete me: If applicable, describe any breaking changes. If not needed delete this entire section.
 
 ## Security
 
 Delete me: Does this PR modify any aspects of our security posture? If so, please describe the security changes, discussions had with the Macuject Information Security Officer, and the testing undertaken. If not needed delete this entire section.
 
-## Jobs (Cron, Lambda etc)
+## Acceptance Testing
+
+Delete me: Does this PR require UAT e.g. by the product or medical team? If so, please describe the testing required and undertaken. If not needed delete this entire section.
+
+## Data
+
+Delete me: Does this PR require manual database, data migration or data flow change? Describe the changes required and testing undertaken. If not needed delete this entire section.
+
+If you have dependencies on migrations in other PR/scripts please ensure you list the specific PR URL, and provide a link to the script(s) in question. This will assist in release building.
+
+## Jobs
 
 Delete me: Does this PR add/update/remove anything that is considered a 'job' e.g. Lambda or Cron (but explicitly not DelayedJob as this is managed entirely within the web application). If so please describe the job and undertake the platform teams [automated job process][job process]. If not needed delete this entire section.
 
