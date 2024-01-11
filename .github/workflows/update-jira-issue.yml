@@ -74,7 +74,7 @@ jobs:
           node-version: 18
 
       - name: Install dependencies
-        run: npm install node-fetch
+        run: npm install node-fetch dotenv
         working-directory: reusable
 
       - name: Run script
