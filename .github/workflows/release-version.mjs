@@ -93,7 +93,8 @@ const fetchAndCompare = async () => {
     }  else {
       // Get the release branch numbers from the Github release branches
       github_release_branches = github_release_branches.split(',').map(item => {
-        return item.trim().substring(item.length - 5);
+        // Release branch names ommit the patch version number, so add it back in
+        return item.trim().substring(item.length - 4) + '.0';
       })
       const githubReleaseBranchNumbers = sortVersionsDescending(github_release_branches);
 
