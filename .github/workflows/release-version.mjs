@@ -149,12 +149,14 @@ const fetchAndCompare = async () => {
         console.log("✅ Issue updated with fixVersion:", correctFixVersion);
       } else {
         console.error("Error updating fixVersion", await response.text());
+        process.exit(1);
       }
     } else {
       console.log('✅ Correct fixVersion is the same as the currently assigned fixVersion. No update needed.');
     }
   } catch (err) {
     console.error(err);
+    process.exit(1);
   }
 };
 
