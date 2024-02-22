@@ -4,14 +4,33 @@
 
 Delete me: Describe the changes in this PR.
 
-## Screenshots / Videos
+## Screenshots
 
-Delete me: If applicable, add screenshots to help explain this PR's changes. If not needed delete this entire section.`
+Delete me: If applicable, add screenshots to help explain this PR's changes. If not needed delete this entire section.
 
-| Type         | Before | After |
-| ------------ | ------ | ----- |
-| Wide screen  | IMG    | IMG   |
-| Small screen | IMG    | IMG   |
+### Before
+
+#### 1366x768
+
+![Before](https://via.placeholder.com/1366x768)
+
+#### 1920x1080
+
+![Before](https://via.placeholder.com/1920x1080)
+
+### After
+
+#### 1366x768
+
+![Before](https://via.placeholder.com/1366x768)
+
+#### 1920x1080
+
+![Before](https://via.placeholder.com/1920x1080)
+
+## Videos
+
+Any videos to help explain the changes in this PR, e.g. Loom or other screen recording tools.
 
 ## Breaking Changes
 
