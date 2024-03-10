@@ -22,11 +22,11 @@ Delete me: If applicable, add screenshots to help explain this PR's changes. If 
 
 #### 1366x768
 
-![Before](https://via.placeholder.com/1366x768)
+![After](https://via.placeholder.com/1366x768)
 
 #### 1920x1080
 
-![Before](https://via.placeholder.com/1920x1080)
+![After](https://via.placeholder.com/1920x1080)
 
 ## Videos
 
