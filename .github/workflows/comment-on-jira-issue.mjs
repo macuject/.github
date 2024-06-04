@@ -4,10 +4,20 @@ dotenv.config();
 const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
 const JIRA_USER_EMAIL = process.env.JIRA_USER_EMAIL;
 const JIRA_API_TOKEN = process.env.JIRA_API_TOKEN;
+const ORG_TEAM_MEMBERS = process.env.ORG_TEAM_MEMBERS;
+const REPO_NAME = process.env.REPO_NAME;
 const PR_TITLE = process.env.PR_TITLE;
 let PR_BODY = process.env.PR_BODY;
 
 import fetch from 'node-fetch';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import FormData from 'form-data';
+
+// Define __dirname for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Extract the issue keys from the start of PR_TITLE
 const ISSUE_KEYS = PR_TITLE.split(':')[0].match(/[A-Z]+-\d+/g);
@@ -17,6 +27,9 @@ PR_BODY = PR_BODY.split('## Checklist')[0];
 
 // Replace <img> tags with the plain url
 PR_BODY = PR_BODY.replace(/<img[^>]*src="([^"]*)"[^>]*>/g, '$1');
+
+// Replace ![]() with the plain url
+PR_BODY = PR_BODY.replace(/!\[[^\]]*\]\(([^\)]*)\)/g, '$1');
 
 const createContentItem = (text, type = "text", marks = []) => ({
   "text": text,
@@ -108,10 +121,12 @@ const processTableLines = (lines) => {
   };
 }
 
-// Process PR_BODY content
+// Process PR_BODY content and handle image links
 let i = 0;
-const contentItems = [];
+let contentItems = [];
 const lines = PR_BODY.split('\n');
+const imageLinks = [];
+
 while (i < lines.length) {
     let line = lines[i];
 
@@ -176,17 +191,24 @@ while (i < lines.length) {
 
                     // If it's a URL match.
                     if (match[1] && match[1].startsWith('http')) {
-                        content.push({
-                            "type": "text",
-                            "text": match[1],
-                            "marks": [{
-                                "type": "link",
-                                "attrs": {
-                                    "href": match[1],
-                                    "title": match[1]
-                                }
-                            }]
-                        });
+                        // If it's an image uploaded to the PR description
+                        if (match[1].startsWith(`https://github.com/macuject/${REPO_NAME}/assets/`)) {
+                            const imageName = `image_${String(imageLinks.length + 1).padStart(3, '0')}`;
+                            imageLinks.push({ url: match[1], name: imageName });
+                            content.push(createContentItem(`See attachment "${imageName}"`));
+                        } else {
+                            content.push({
+                                "type": "text",
+                                "text": match[1],
+                                "marks": [{
+                                    "type": "link",
+                                    "attrs": {
+                                        "href": match[1],
+                                        "title": match[1]
+                                    }
+                                }]
+                            });
+                        }
                     }
                     // If it's a bold match.
                     else if (match[1]) {
@@ -213,7 +235,7 @@ while (i < lines.length) {
     }
 }
 
-const bodyData = JSON.stringify({
+let bodyData = JSON.stringify({
   "body": {
     "content": contentItems,
     "type": "doc",
@@ -252,4 +274,142 @@ const commentOnJiraIssue = async () => {
   }
 }
 
-commentOnJiraIssue();
+const downloadImage = async (url, dest) => {
+  // We need to follow the redirect to get the actual image URL
+  const actualImageUrl = await getRedirectedUrl(url);
+  const response = await fetch(actualImageUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to download image: ${response.statusText}`);
+  }
+  const buffer = await response.buffer();
+  await fs.promises.writeFile(dest, buffer);
+  console.log(`Image downloaded to ${dest}`);
+};
+
+const getRedirectedUrl = async (url) => {
+  const response = await fetch(url, {
+    method: 'HEAD',
+    headers: {
+      'Authorization': `token ${ORG_TEAM_MEMBERS}`
+    },
+    redirect: 'follow'
+  });
+  return response.url;
+};
+
+const uploadImageToJira = async (issueKey, filePath) => {
+  const form = new FormData();
+  const fileStream = fs.createReadStream(filePath);
+  form.append('file', fileStream);
+
+  const response = await fetch(`${JIRA_BASE_URL}/rest/api/3/issue/${issueKey}/attachments`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${Buffer.from(
+        `${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}`
+      ).toString('base64')}`,
+      'X-Atlassian-Token': 'no-check',
+      ...form.getHeaders() // Get the headers for the form data
+    },
+    body: form
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to upload image to Jira: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  console.log(`Image uploaded to Jira issue ${issueKey}: ${data[0].content}`);
+  return data[0].content;
+};
+
+const handleImageDownloadAndUpload = async () => {
+  const uploadLinks = {};
+
+  for (const ISSUE_KEY of ISSUE_KEYS) {
+    uploadLinks[ISSUE_KEY] = [];
+    for (const { url, name } of imageLinks) {
+      const tempImagePath = path.join(__dirname, `${name}.jpg`);
+      await downloadImage(url, tempImagePath);
+      const downloadLink = await uploadImageToJira(ISSUE_KEY, tempImagePath);
+      await fs.promises.unlink(tempImagePath); // Clean up the temp image
+
+      // Collect the download link for each image
+      uploadLinks[ISSUE_KEY].push({ name, downloadLink });
+    }
+  }
+
+  // Update the contentItems with the download links
+  contentItems = contentItems.map(item => {
+    if (item.type === 'paragraph') {
+      uploadLinks[ISSUE_KEYS[0]].forEach(({ name, downloadLink }) => {
+        if (item.content[0].text.includes(`See attachment "${name}"`)) {
+          item.content = [{
+            "type": "text",
+            "text": `See attachment "${name}" above or `,
+            "marks": []
+          }, {
+            "type": "text",
+            "text": "click here",
+            "marks": [{
+              "type": "link",
+              "attrs": {
+                "href": downloadLink,
+                "title": downloadLink
+              }
+            }]
+          }, {
+            "type": "text",
+            "text": " to download the image.",
+            "marks": []
+          }];
+        }
+      });
+    }
+    return item;
+  });
+
+  // Recreate the bodyData with the updated contentItems
+  bodyData = JSON.stringify({
+    "body": {
+      "content": contentItems,
+      "type": "doc",
+      "version": 1
+    }
+  });
+
+  // Post the updated comment with download links
+  await postCommentOnJiraIssue(bodyData);
+};
+
+const postCommentOnJiraIssue = async (bodyData) => {
+  try {
+    for (const ISSUE_KEY of ISSUE_KEYS) {
+      const response = await fetch(`${JIRA_BASE_URL}/rest/api/3/issue/${ISSUE_KEY}/comment`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${Buffer.from(
+            `${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}`
+          ).toString('base64')}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: bodyData
+      });
+
+      if (!response.ok) {
+        throw new Error(`Response: ${response.status} ${response.statusText}`);
+      }
+
+      console.log(`Response: ${response.status} ${response.statusText}`);
+      const text = await response.text();
+      console.log(text);
+    }
+  } catch (error) {
+    console.error('Failed to add comment on Jira issue:', error);
+    process.exit(1);
+  }
+};
+
+handleImageDownloadAndUpload()
+  .catch((error) => console.error("Error in process:", error));
