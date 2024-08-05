@@ -192,7 +192,7 @@ while (i < lines.length) {
                     // If it's a URL match.
                     if (match[1] && match[1].startsWith('http')) {
                         // If it's an image uploaded to the PR description
-                        if (match[1].startsWith(`https://github.com/macuject/${REPO_NAME}/assets/`)) {
+                        if (match[1].startsWith(`https://github.com/user-attachments/assets/`)) {
                             const imageName = `image_${String(imageLinks.length + 1).padStart(3, '0')}`;
                             imageLinks.push({ url: match[1], name: imageName });
                             content.push(createContentItem(`See attachment "${imageName}"`));
