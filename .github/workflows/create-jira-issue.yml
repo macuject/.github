@@ -11,6 +11,10 @@ on:
         description: The name of the GitHub Org team to assign the issue to
         required: true
         type: string
+      dependabot_exclude_team_members:
+        description: Comma-separated list of team members to exclude from being assigned as reviewer when Dependabot opens a PR
+        required: false
+        type: string
       issue_type:
         description: The type of issue to create
         required: false
@@ -61,16 +65,33 @@ jobs:
         if: steps.skip.outcome == 'skipped'
         run: echo "Release branch names ${{ steps.get_release_branch_names.outputs.release_branches }}"
 
+      # Prevent dependency conflicts
+      - name: Delete current_repo
+        run: rm -rf current_repo
+
+      - name: Checkout code from macuject/.github repo
+        uses: actions/checkout@v3
+        with:
+          repository: macuject/.github
+          path: reusable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install node-fetch dotenv
+        working-directory: reusable
+
       - name: Assign GH team member as reviewer # Assign a random member of the specified GitHub Org team as reviewer
         if: steps.skip.outcome == 'skipped'
-        uses: dc-ag/auto-assign-reviewers-from-team@v1.3.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          admin-repo-token: ${{ secrets.ORG_TEAM_MEMBERS }} # GitHub Personal Access Token that has 'repo' rights
-          team: ${{ inputs.github_team }}
-          amount: 1 # Amount of reviewers to assign
-          use-team-reviewer-settings: false # Set to true if you want to use the team's reviewer settings instead of a specific amount
-          ignore-branches-regex: "" # Regex to check branches. If matched the PR won't be assigned any reviewers via this workflow
+        run: node reusable/.github/workflows/assign-reviewer.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TEAM: ${{ inputs.github_team }}
+          AMOUNT: 1
+          EXCLUDE_MEMBERS: ${{ inputs.dependabot_exclude_team_members }}
 
       - name: Get PR reviewer # To be used to assign Jira issue to the same person
         if: steps.skip.outcome == 'skipped'
