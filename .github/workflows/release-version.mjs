@@ -29,7 +29,6 @@ const fetchCurrentFixVersions = async () => {
 
 const fetchUnreleasedJiraFixVersions = async () => {
   const response = await fetch(`${JIRA_BASE_URL}/rest/api/3/project/${PROJECT_KEY}/version?status=unreleased&orderBy=name`, {
-  // const response = await fetch(`${JIRA_BASE_URL}/rest/api/3/project/${PROJECT_KEY}/versions`, {
     method: 'GET',
     headers: {
       'Authorization': `Basic ${Buffer.from(
@@ -91,7 +90,7 @@ const fetchAndCompare = async () => {
         console.error('Release branch number not found in Jira fixVersions. Unclear how to proceed, so returning early.');
         process.exit(1);
       }
-    }  else if (github_release_branches.length > 0) {
+    } else if (github_release_branches.length > 0) {
         // Get the release branch numbers from the Github release branches
         github_release_branches = github_release_branches.split(',').map(item => {
           // Release branch names ommit the patch version number, so add it back in
