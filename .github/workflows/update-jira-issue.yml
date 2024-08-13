@@ -29,11 +29,18 @@ jobs:
         run: |
           echo "JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}"
 
-      - name: Extract issue key from pull request title
+      - name: Extract issue key and project key from pull request title
         id: extract_keys
         run: |
-          echo "issue_key=$(echo ${{ github.event.pull_request.title }} | cut -d ':' -f1)" >> $GITHUB_OUTPUT
-          echo "project_key=$(echo ${{ github.event.pull_request.title }} | cut -d '-' -f1)" >> $GITHUB_OUTPUT
+          title="${{ github.event.pull_request.title }}"
+          # Extract issue key (first part before the first colon)
+          issue_key=$(echo "$title" | cut -d ':' -f1)
+
+          # Extract project key (first part before the first '-') and remove leading '[' if present (e.g. '[WA-42, WA-23]')
+          project_key=$(echo "$issue_key" | cut -d '-' -f1 | sed 's/^\[//')
+
+          echo "issue_key=$issue_key" >> $GITHUB_OUTPUT
+          echo "project_key=$project_key" >> $GITHUB_OUTPUT
 
       - name: Log issue key and project key
         run: |
