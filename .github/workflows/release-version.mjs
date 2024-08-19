@@ -108,12 +108,11 @@ const fetchAndCompare = async () => {
         // Find the lowest Jira version number that is higher than the highest release branch number
         correctFixVersion = unreleasedJiraFixVersions.find(item => item > highestReleaseBranchNum)
         console.log('Correct fixVersion:', correctFixVersion);
-      } else {
-        // If there are no release branches, use the lowest Jira version number as the correct fixVersion
-        correctFixVersion = unreleasedJiraFixVersions[0];
-        console.log('No release branches found. Using the lowest unreleased Jira version number as the correct fixVersion.')
-        console.log('Correct fixVersion:', correctFixVersion);
-      }
+    } else {
+      // If there are no release branches, use the lowest Jira version number as the correct fixVersion
+      correctFixVersion = unreleasedJiraFixVersions[0];
+      console.log('No release branches found. Using the lowest unreleased Jira version number as the correct fixVersion.')
+      console.log('Correct fixVersion:', correctFixVersion);
     }
 
     // If the correct fixVersion is not the same as the currently assigned fixVersion, update the issue
