@@ -83,7 +83,7 @@ jobs:
           node-version: 18
 
       - name: Install dependencies
-        run: npm install node-fetch dotenv
+        run: npm install node-fetch dotenv @actions/core @actions/github
         working-directory: reusable
 
       - name: Assign GH team member as reviewer # Assign a random member of the specified GitHub Org team as reviewer
