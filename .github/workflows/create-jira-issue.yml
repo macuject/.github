@@ -86,6 +86,16 @@ jobs:
         run: npm install node-fetch dotenv @actions/core @actions/github
         working-directory: reusable
 
+      - id: get-members
+        uses: garnertb/get-team-members@v1
+        with:
+          org: macuject
+          team_slug: ${{ inputs.github_team }}
+          token: ${{ secrets.ORG_TEAM_MEMBERS }}
+
+      - run: "echo ${{ steps.get-members.outputs.members }}"
+        shell: bash
+
       - name: Assign GH team member as reviewer # Assign a random member of the specified GitHub Org team as reviewer
         if: steps.skip.outcome == 'skipped'
         run: node reusable/.github/workflows/assign-reviewer.mjs
@@ -93,6 +103,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TEAM: ${{ inputs.github_team }}
           AMOUNT: 1
+          ALL_MEMBERS: ${{ steps.get-members.outputs.members }}
           EXCLUDE_MEMBERS: ${{ inputs.dependabot_exclude_team_members }}
 
       - name: Get PR reviewer # To be used to assign Jira issue to the same person
@@ -104,6 +115,7 @@ jobs:
             reviewer_username=$(gh pr view ${{ github.event.pull_request.number }} --json reviews --jq '.reviews[0].author.login')
           fi
           echo "reviewer=$reviewer_username" >> $GITHUB_OUTPUT
+        working-directory: current_repo
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
