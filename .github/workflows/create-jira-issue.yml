@@ -89,7 +89,7 @@ jobs:
       - id: get-members
         uses: garnertb/get-team-members@v1
         with:
-          org: doctor-power
+          org: macuject
           team_slug: ${{ inputs.github_team }}
           token: ${{ secrets.ORG_TEAM_MEMBERS }}
 
