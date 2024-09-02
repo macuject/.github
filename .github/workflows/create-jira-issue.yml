@@ -155,6 +155,7 @@ jobs:
         run: |
           gh pr edit ${{ github.event.pull_request.number }} \
             --title "${{ steps.create.outputs.issue }}: ${{ github.event.pull_request.title }}"
+        working-directory: current_repo
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -163,5 +164,6 @@ jobs:
         run: |
           gh pr comment ${{ github.event.pull_request.number }} \
             --body "Associated Jira issue: https://macuject.atlassian.net/browse/${{ steps.create.outputs.issue }}"
+        working-directory: current_repo
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
