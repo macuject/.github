@@ -6,8 +6,9 @@ import * as github from "@actions/github";
 async function run() {
   try {
     const repoToken = process.env.GITHUB_TOKEN;
-    const team = process.env.GITHUB_TEAM;
+    const team = process.env.GITHUB_TEAM.toLowerCase();
     const amount = parseInt(process.env.AMOUNT);
+    const allMembers = process.env.ALL_MEMBERS;
     const excludeMembers = process.env.EXCLUDE_MEMBERS
       ? process.env.EXCLUDE_MEMBERS.split(",")
       : [];
@@ -33,12 +34,7 @@ async function run() {
       return;
     }
 
-    const members = await octokit.rest.teams.listMembersInOrg({
-      org: ghOrg,
-      team_slug: team,
-    });
-
-    let memberNames = members.data.map((a) => a.login);
+    let memberNames = allMembers.split(",").map((name) => name.trim());
 
     // Exclude PR author and members from the exclude list
     memberNames = memberNames.filter(
