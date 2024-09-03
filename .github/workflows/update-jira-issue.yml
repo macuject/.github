@@ -130,8 +130,11 @@ jobs:
       - name: Extract issue key from pull request title
         id: extract_keys
         run: |
-          echo "issue_key=$(echo '${{ github.event.pull_request.title }}' | cut -d ':' -f1)" >> $GITHUB_OUTPUT
-          echo "project_key=$(echo '${{ github.event.pull_request.title }}' | cut -d '-' -f1)" >> $GITHUB_OUTPUT
+          title="${{ github.event.pull_request.title }}"
+          issue_key=$(echo "$title" | cut -d ':' -f1)
+          project_key=$(echo "$title" | cut -d '-' -f1)
+          echo "issue_key=$issue_key" >> $GITHUB_OUTPUT
+          echo "project_key=$project_key" >> $GITHUB_OUTPUT
 
       - name: Log issue key and project key
         run: |
