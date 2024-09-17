@@ -1,4 +1,4 @@
-**Jira**: https://macuject.atlassian.net/browse/[ID]
+**Jira**: XX-123
 
 ## Description
 
