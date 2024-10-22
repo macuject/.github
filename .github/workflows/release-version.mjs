@@ -46,8 +46,8 @@ const fetchUnreleasedJiraFixVersions = async () => {
 
 function sortVersionsDescending(versions) {
   return versions.sort((a, b) => {
-    let aParts = a.replace('release/', '').split('.').map(Number);
-    let bParts = b.replace('release/', '').split('.').map(Number);
+    let aParts = a.replace(/^(origin\/)?release\//, '').split('.').map(Number);
+    let bParts = b.replace(/^(origin\/)?release\//, '').split('.').map(Number);
 
     for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
       if ((aParts[i] || 0) > (bParts[i] || 0)) return -1;
@@ -116,7 +116,7 @@ async function fetchAndCompare() {
         console.log('Currently assigned fixVersion for Jira ticket:', predictedFixVersion);
 
         // Get the highest release branch number
-        let highestReleaseBranchNum = githubReleaseBranchNumbers[0].replace('release/', '');
+        let highestReleaseBranchNum = githubReleaseBranchNumbers[0].replace(/^(origin\/)?release\//, '');
 
         // Find the lowest Jira version number that is higher than the highest release branch number
         correctFixVersion = unreleasedJiraFixVersions.find(item => {
