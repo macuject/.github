@@ -8,7 +8,10 @@ const IS_RELEASE_BRANCH = BRANCH_NAME.startsWith('release');
 
 /* Extract the issue keys from the branch name */
 let ISSUE_KEYS;
-const regex = new RegExp(`(${PROJECT_KEY}-\\d+)(\\+${PROJECT_KEY}-\\d+)*`, 'g');
+const regex = new RegExp(`(${PROJECT_KEY}-?\\d+)(\\+${PROJECT_KEY}-?\\d+)*`, 'g');
+
+// Extract issue keys from branch name, allowing for optional hyphens and case-insensitive matching
+const caseInsensitiveRegex = new RegExp(`(${PROJECT_KEY}-?\\d+)(\\+${PROJECT_KEY}-?\\d+)*`, 'gi');
 
 if (IS_RELEASE_BRANCH) {
     console.log("Release branch detected. Skipping check for issue key in branch name.");
@@ -64,3 +67,41 @@ if (issueKeysInTitle.length > 0) {
     console.log(`PR title does not start with any of the ISSUE_KEYS: ${ISSUE_KEYS && ISSUE_KEYS.length > 0 ? `[${ISSUE_KEYS.join(', ')}]` : ''}`);
     console.log(`::set-output name=pr_title_valid::false`);
 }
+
+/* Clean PR title by removing duplicate issue keys and ensuring proper format */
+function cleanPRTitle(title) {
+    // First, extract the issue keys if they exist at the start followed by a colon
+    const startsWithKey = title.match(new RegExp(`^(${PROJECT_KEY}-?\\d+)(\\+${PROJECT_KEY}-?\\d+)*:`, 'i'));
+
+    // Remove any occurrence of the issue key (case insensitive) from the rest of the title
+    let cleanedTitle = title;
+    if (startsWithKey) {
+        // Get the description part after the colon
+        cleanedTitle = title.substring(startsWithKey[0].length).trim();
+    } else {
+        // Extract first occurrence of any issue key
+        const keyMatch = title.match(caseInsensitiveRegex);
+        if (keyMatch) {
+            // Remove the found key and any following slash from the title
+            cleanedTitle = title.replace(new RegExp(`${keyMatch[0]}/?`), '').trim();
+            // Remove common separators that might be left over
+            cleanedTitle = cleanedTitle.replace(/^[/\\: ]/, '').trim();
+        }
+    }
+
+    // Remove any remaining occurrences of the issue key, including variations with and without hyphen
+    const keyToRemove = new RegExp(`${PROJECT_KEY}[-\\s]?\\d+/?`, 'gi');
+    cleanedTitle = cleanedTitle.replace(keyToRemove, '').trim();
+
+    // Format the title with the uppercase issue key, ensuring proper hyphen format
+    let issueKey = title.match(regex)?.[0]?.toUpperCase() || title.match(caseInsensitiveRegex)?.[0]?.toUpperCase();
+    if (issueKey) {
+        // Ensure the issue key has a hyphen
+        issueKey = issueKey.replace(/([A-Z]+)(?!-)(\d+)/, '$1-$2');
+        return `${issueKey}: ${cleanedTitle}`;
+    }
+    return title;
+}
+
+const cleanedTitle = cleanPRTitle(CURRENT_PR_TITLE);
+console.log(`::set-output name=cleaned_pr_title::${cleanedTitle}`);

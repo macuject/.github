@@ -1,5 +1,3 @@
-**Jira**: XX-123
-
 ## Description
 
 Delete me: Describe the changes in this PR.
