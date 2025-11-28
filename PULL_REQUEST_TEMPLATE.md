@@ -50,7 +50,7 @@ If you have dependencies on migrations in other PR/scripts please ensure you lis
 
 ## Jobs
 
-Delete me: Does this PR add/update/remove anything that is considered a 'job' e.g. Lambda or Cron (but explicitly not DelayedJob as this is managed entirely within the web application). If so please describe the job and undertake the platform teams [automated job process][job process]. If not needed delete this entire section.
+Delete me: Does this PR add/update/remove anything that is considered a 'job' e.g. Lambda or Cron (but explicitly not Solid Queue as this is managed entirely within the web application). If so please describe the job and undertake the platform teams [automated job process][job process]. If not needed delete this entire section.
 
 ## Impact Assessment
 
