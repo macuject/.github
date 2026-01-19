@@ -1,3 +1,5 @@
+Stacked on: <GitHub PR ID>  # DELETE ME if base branch is `main`
+
 ## Description
 
 Delete me: Describe the changes in this PR.
