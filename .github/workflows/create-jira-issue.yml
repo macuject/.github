@@ -126,7 +126,7 @@ jobs:
       - name: Create Jira issue
         if: steps.skip.outcome == 'skipped'
         id: create
-        uses: macuject/gajira-create@1.0.1
+        uses: macuject/gajira-create@1.0.2
         with:
           project: ${{ inputs.project }}
           issuetype: ${{ inputs.issue_type }}
