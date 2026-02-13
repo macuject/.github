@@ -205,3 +205,20 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           ORG_TEAM_MEMBERS: ${{ secrets.ORG_TEAM_MEMBERS }} # GitHub Personal Access Token that has 'repo' and 'workflow' rights
           REPO_NAME: ${{ github.event.repository.name }}
+
+  # On close without merge (any author)
+  # - Post a comment reminding the author to manually update Jira if the work is abandoned
+  notify_manual_jira_transition_on_close:
+    if: github.event.pull_request.merged == false # PR is closed without merge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment on PR about manual Jira transition
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: 'This PR was closed without being merged. The linked Jira issue(s) have **not** been automatically transitioned.\n\nIf this work is abandoned, please manually move the Jira issue to "Won\'t Progress". If you\'re replacing this PR with a new one, no action is needed.'
+            });
