@@ -56,7 +56,9 @@ Delete me: Does this PR add/update/remove anything that is considered a 'job' e.
 
 ## Impact Assessment
 
-As part of our ongoing commitment to maintaining compliance with SOC 2 and HIPAA regulations, each proposed change should have an impact assessment undertaken. Our [impact assessment] documentation contains a summary and complete details.
+As part of our ongoing commitment to maintaining compliance with SOC 2 and HIPAA regulations, each proposed change should have an impact assessment undertaken.
+
+> **Before selecting a rating, please review the [Impact Assessment Rating][impact assessment] guide for detailed criteria and examples.**
 
 - **High**: Potential for significant harm to sensitive data or user access and material adverse impact on Macuject's operations or reputation.
 - **Medium**: Potential for moderate harm to sensitive data or user access and adverse impact on Macuject's operations or reputation.
@@ -82,4 +84,4 @@ I've considered all of the following and added details to the PR description whe
 - [ ] Security changes. This also requires the Macuject Information Security Officer to be added to this PR as an additional reviewer.
 
 [job process]: https://macuject.atlassian.net/wiki/spaces/TT/pages/1705082972/Automated+Jobs
-[impact assessment]: https://docs.google.com/document/d/1MSPJaPb9LaLvJEH6PIaRULBcz7IaODjRuE6_9hlhHMI
+[impact assessment]: https://macuject.atlassian.net/wiki/spaces/TT/pages/2382036993/Impact+Assessment+Rating
