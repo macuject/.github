@@ -13,6 +13,7 @@ every repository in the organisation.
   impacted product's Jira project (e.g. WebApp, Platform, Inference Pipeline).
 - Branch naming follows the pattern: `PROJECT-123/short-description`
 - When creating pull requests, use the template defined in `PULL_REQUEST_TEMPLATE.md`.
+- The full **Impact Assessment** section text (including all level definitions) must always be retained in PR descriptions — do not truncate or summarise it.
 
 ## Commit Messages
 
