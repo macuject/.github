@@ -77,6 +77,20 @@ function sortVersionsDescending(versions) {
 // Determine which fixVersion should be assigned to the Jira issue(s)
 async function fetchAndCompare() {
   try {
+    // Validate ISSUE_KEY matches Jira key pattern before making API calls
+    const JIRA_KEY_PATTERN = /^[A-Z]+-\d+$/;
+    const JIRA_MULTI_KEY_PATTERN = /^\[([A-Z]+-\d+)(,\s*[A-Z]+-\d+)*\]$/;
+
+    if (!JIRA_KEY_PATTERN.test(ISSUE_KEY) && !JIRA_MULTI_KEY_PATTERN.test(ISSUE_KEY)) {
+      console.log(`ISSUE_KEY "${ISSUE_KEY}" does not match Jira key pattern. Skipping fixVersion update.`);
+      process.exit(0);
+    }
+
+    if (!/^[A-Z]+$/.test(PROJECT_KEY)) {
+      console.log(`PROJECT_KEY "${PROJECT_KEY}" does not match expected pattern. Skipping fixVersion update.`);
+      process.exit(0);
+    }
+
     let issueKeys;
     if (ISSUE_KEY.startsWith('[') && ISSUE_KEY.endsWith(']')) {
       issueKeys = ISSUE_KEY.slice(1, -1).split(',').map(key => key.trim());
