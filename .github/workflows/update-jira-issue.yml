@@ -42,12 +42,25 @@ jobs:
           echo "issue_key=$issue_key" >> $GITHUB_OUTPUT
           echo "project_key=$project_key" >> $GITHUB_OUTPUT
 
+      - name: Validate extracted issue key
+        id: validate_key
+        run: |
+          issue_key="${{ steps.extract_keys.outputs.issue_key }}"
+          if [[ "$issue_key" =~ ^[A-Z]+-[0-9]+$ ]]; then
+            echo "valid=true" >> $GITHUB_OUTPUT
+          else
+            echo "Issue key '$issue_key' does not match Jira key pattern. Skipping."
+            echo "valid=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Log issue key and project key
+        if: steps.validate_key.outputs.valid == 'true'
         run: |
           echo "Issue key: ${{ steps.extract_keys.outputs.issue_key }}"
           echo "Project key: ${{ steps.extract_keys.outputs.project_key }}"
 
       - name: Checkout code
+        if: steps.validate_key.outputs.valid == 'true'
         uses: actions/checkout@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -55,6 +68,7 @@ jobs:
           path: current_repo
 
       - name: Get release branch names
+        if: steps.validate_key.outputs.valid == 'true'
         id: get_release_branch_names
         run: |
           all_branches=$(git branch -r --format='%(refname:short)')
@@ -63,28 +77,34 @@ jobs:
         working-directory: current_repo
 
       - name: Log release branch names
+        if: steps.validate_key.outputs.valid == 'true'
         run: echo "Release branch names ${{ steps.get_release_branch_names.outputs.release_branches }}"
 
       # Prevent dependency conflicts
       - name: Delete current_repo
+        if: steps.validate_key.outputs.valid == 'true'
         run: rm -rf current_repo
 
       - name: Checkout code from macuject/.github repo
+        if: steps.validate_key.outputs.valid == 'true'
         uses: actions/checkout@v3
         with:
           repository: macuject/.github
           path: reusable
 
       - name: Setup Node.js
+        if: steps.validate_key.outputs.valid == 'true'
         uses: actions/setup-node@v3
         with:
           node-version: 18
 
       - name: Install dependencies
+        if: steps.validate_key.outputs.valid == 'true'
         run: npm install node-fetch dotenv form-data
         working-directory: reusable
 
       - name: Run script
+        if: steps.validate_key.outputs.valid == 'true'
         run: node reusable/.github/workflows/release-version.mjs
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
