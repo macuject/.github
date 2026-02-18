@@ -139,6 +139,20 @@ jobs:
           releaseBranches: ${{ steps.get_release_branch_names.outputs.release_branches }}
           githubJiraUserMap: ${{ vars.GH_JIRA_USER_MAP }}
 
+      - name: Transition Jira issue to Ready
+        if: steps.skip.outcome == 'skipped'
+        uses: atlassian/gajira-transition@v3
+        with:
+          issue: ${{ steps.create.outputs.issue }}
+          transition: Ready
+
+      - name: Transition Jira issue to In Progress
+        if: steps.skip.outcome == 'skipped'
+        uses: atlassian/gajira-transition@v3
+        with:
+          issue: ${{ steps.create.outputs.issue }}
+          transition: In Progress
+
       - name: Transition Jira issue to In Review
         if: steps.skip.outcome == 'skipped'
         uses: atlassian/gajira-transition@v3
