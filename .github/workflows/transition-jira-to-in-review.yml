@@ -1,0 +1,55 @@
+# Transitions a Jira issue to "In Review" when a non-dependabot PR is opened (non-draft) or marked ready for review.
+# Extracts the Jira issue key from the PR branch name.
+name: Transition Jira to In Review
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: 'Jira project key (e.g. WA)'
+        required: true
+        type: string
+    secrets:
+      JIRA_BASE_URL:
+        required: true
+      JIRA_USER_EMAIL:
+        required: true
+      JIRA_API_TOKEN:
+        required: true
+
+jobs:
+  Transition:
+    # Only run for non-dependabot PRs that are ready for review:
+    # - opened as non-draft, OR
+    # - converted from draft to ready for review
+    if: >-
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract issue key from branch name
+        id: extract_key
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          PROJECT="${{ inputs.project }}"
+          ISSUE_KEY=$(echo "$BRANCH" | grep -oE "${PROJECT}-[0-9]+" | head -1)
+          if [[ -z "$ISSUE_KEY" ]]; then
+            echo "No issue key found in branch name: $BRANCH"
+          else
+            echo "issue_key=$ISSUE_KEY" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Log in to Jira
+        if: steps.extract_key.outputs.issue_key != ''
+        uses: atlassian/gajira-login@v3
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+
+      - name: Transition Jira issue to In Review
+        if: steps.extract_key.outputs.issue_key != ''
+        uses: atlassian/gajira-transition@v3
+        with:
+          issue: ${{ steps.extract_key.outputs.issue_key }}
+          transition: In Review
