@@ -34,7 +34,7 @@ jobs:
           PROJECT="${{ inputs.project }}"
           ISSUE_KEY=$(echo "$BRANCH" | grep -oE "${PROJECT}-[0-9]+" | head -1)
           if [[ -z "$ISSUE_KEY" ]]; then
-            echo "No issue key found in branch name: $BRANCH"
+            echo "::warning::No Jira issue key found in branch name: $BRANCH"
           else
             echo "issue_key=$ISSUE_KEY" >> $GITHUB_OUTPUT
           fi
