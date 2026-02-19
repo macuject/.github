@@ -1,5 +1,13 @@
 # Transitions a Jira issue to "In Review" when a non-dependabot PR is opened (non-draft) or marked ready for review.
 # Extracts the Jira issue key from the PR branch name.
+#
+# Calling repos must provide the transition_name for their Jira project. This is the name of the
+# transition (the arrow label in the workflow), NOT the target status (the column name).
+# For example, in the WA project the transition name is "Implementation completed" and the target
+# status is "In Review". To find your project's transition name:
+#   1. Jira REST API: GET /rest/api/3/issue/{ISSUE-KEY}/transitions — find the transition whose
+#      "to.name" is "In Review" and use its "name" field
+#   2. Jira board: Board → Settings → Workflows — the labels on the arrows between statuses
 name: Transition Jira to In Review
 
 on:
@@ -8,6 +16,18 @@ on:
       project:
         description: 'Jira project key (e.g. WA)'
         required: true
+        type: string
+      transition_name:
+        description: >-
+          The Jira transition name to execute (e.g. "Implementation completed").
+          This is the transition name, not the target status name — see workflow header comment
+          for how to find it.
+        required: true
+        type: string
+      target_status:
+        description: 'Target status to check against — skip transition if issue is already in this status (default: In Review)'
+        required: false
+        default: 'In Review'
         type: string
     secrets:
       JIRA_BASE_URL:
@@ -47,9 +67,23 @@ jobs:
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
 
-      - name: Transition Jira issue to In Review
+      - name: Check current issue status
         if: steps.extract_key.outputs.issue_key != ''
+        id: check_status
+        run: |
+          CURRENT_STATUS=$(curl -s -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${{ steps.extract_key.outputs.issue_key }}?fields=status" \
+            | jq -r '.fields.status.name')
+          echo "current_status=$CURRENT_STATUS" >> $GITHUB_OUTPUT
+          if [[ "$CURRENT_STATUS" == "${{ inputs.target_status }}" ]]; then
+            echo "::notice::Issue ${{ steps.extract_key.outputs.issue_key }} is already in '${{ inputs.target_status }}' — skipping transition"
+          fi
+
+      - name: Transition Jira issue to In Review
+        if: >-
+          steps.extract_key.outputs.issue_key != '' &&
+          steps.check_status.outputs.current_status != inputs.target_status
         uses: atlassian/gajira-transition@v3
         with:
           issue: ${{ steps.extract_key.outputs.issue_key }}
-          transition: In Review
+          transition: ${{ inputs.transition_name }}
