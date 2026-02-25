@@ -1,13 +1,9 @@
 # Transitions a Jira issue to "In Review" when a non-dependabot PR is opened (non-draft) or marked ready for review.
 # Extracts the Jira issue key from the PR branch name.
 #
-# Calling repos must provide the transition_name for their Jira project. This is the name of the
-# transition (the arrow label in the workflow), NOT the target status (the column name).
-# For example, in the WA project the transition name is "Implementation completed" and the target
-# status is "In Review". To find your project's transition name:
-#   1. Jira REST API: GET /rest/api/3/issue/{ISSUE-KEY}/transitions — find the transition whose
-#      "to.name" is "In Review" and use its "name" field
-#   2. Jira board: Board → Settings → Workflows — the labels on the arrows between statuses
+# Jira boards use global transitions where transition names equal the target status name
+# (e.g. the transition to "In Review" is named "In Review"). The transition_name input
+# defaults to "In Review" and should not need to be overridden in most cases.
 name: Transition Jira to In Review
 
 on:
@@ -19,10 +15,10 @@ on:
         type: string
       transition_name:
         description: >-
-          The Jira transition name to execute (e.g. "Implementation completed").
-          This is the transition name, not the target status name — see workflow header comment
-          for how to find it.
-        required: true
+          The Jira transition name to execute. With global transitions this equals
+          the target status name (e.g. "In Review").
+        required: false
+        default: 'In Review'
         type: string
       target_status:
         description: 'Target status to check against — skip transition if issue is already in this status (default: In Review)'
