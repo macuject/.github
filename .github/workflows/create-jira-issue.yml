@@ -25,6 +25,11 @@ on:
         required: false
         default: security, dependabot
         type: string
+      assign_reviewer:
+        description: Whether to assign a GitHub team member as PR reviewer. Set to false for dependabot minor/patch PRs where auto-merge is expected.
+        required: false
+        default: true
+        type: boolean
     secrets:
       JIRA_BASE_URL:
         required: true
@@ -93,7 +98,7 @@ jobs:
         shell: bash
 
       - name: Assign GH team member as reviewer # Assign a random member of the specified GitHub Org team as reviewer
-        if: steps.skip.outcome == 'skipped'
+        if: steps.skip.outcome == 'skipped' && inputs.assign_reviewer != false
         run: node reusable/.github/workflows/assign-reviewer.mjs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -103,7 +108,7 @@ jobs:
           EXCLUDE_MEMBERS: ${{ inputs.dependabot_exclude_team_members }}
 
       - name: Get PR reviewer # To be used to assign Jira issue to the same person
-        if: steps.skip.outcome == 'skipped'
+        if: steps.skip.outcome == 'skipped' && inputs.assign_reviewer != false
         id: get_reviewer
         run: | # Use the first reviewer request (PR not yet reviewed), or if none, the first review (PR already reviewed)
           reviewer_username=$(gh pr view ${{ github.event.pull_request.number }} --json reviewRequests --jq '.reviewRequests[0].login')
@@ -135,7 +140,7 @@ jobs:
           body: ${{ github.event.pull_request.body }}
           prlink: ${{ github.event.pull_request._links.html.href }}
           labels: ${{ inputs.labels }}
-          assignee: ${{ steps.get_reviewer.outputs.reviewer }}
+          assignee: ${{ inputs.assign_reviewer != false && steps.get_reviewer.outputs.reviewer || '' }}
           releaseBranches: ${{ steps.get_release_branch_names.outputs.release_branches }}
           githubJiraUserMap: ${{ vars.GH_JIRA_USER_MAP }}
 
