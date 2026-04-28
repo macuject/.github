@@ -1,0 +1,38 @@
+name: Dependabot Auto-Merge
+
+# Reusable workflow. Auto-merges minor/patch Dependabot PRs.
+#
+# Performs the merge using ORG_TEAM_MEMBERS rather than GITHUB_TOKEN so
+# that the resulting `pull_request: closed` event triggers downstream
+# workflows (specifically update-jira-issue.yml, which sets fixVersion
+# and transitions the linked Jira issue to Done). Merges performed by
+# GITHUB_TOKEN do not create new workflow runs — see
+# https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow
+
+on:
+  workflow_call:
+    secrets:
+      ORG_TEAM_MEMBERS:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch dependabot metadata
+        uses: dependabot/fetch-metadata@v2
+        id: metadata
+
+      - name: Enable auto-merge for minor/patch
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-minor' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-patch'
+        run: gh pr merge --auto --merge "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
