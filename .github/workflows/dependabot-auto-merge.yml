@@ -1,6 +1,12 @@
 name: Dependabot Auto-Merge
 
-# Reusable workflow. Auto-merges minor/patch Dependabot PRs.
+# Reusable workflow. Auto-merges minor/patch Dependabot PRs only after
+# the caller's CI workflow (`inputs.workflow_name`, default `CI`) has
+# completed with `conclusion=success` on the PR head commit.
+#
+# Triggered (in callers) by `workflow_run` on the CI workflow completing,
+# and by `pull_request_review` on review submission, so the merge fires
+# whichever signal arrives last: CI going green or the human approval.
 #
 # Performs the merge using ORG_TEAM_MEMBERS rather than GITHUB_TOKEN so
 # that the resulting `pull_request: closed` event triggers downstream
@@ -11,6 +17,16 @@ name: Dependabot Auto-Merge
 
 on:
   workflow_call:
+    inputs:
+      workflow_name:
+        description: >-
+          Name of the CI workflow whose latest run on the PR head SHA must
+          have `conclusion=success` before a merge is allowed. The caller
+          should also list this workflow under `on.workflow_run.workflows`.
+          Defaults to `CI` to match `macuject/web`; `macuject/platform` and
+          other consumers with a differently named workflow must override.
+        type: string
+        default: CI
     secrets:
       ORG_TEAM_MEMBERS:
         required: true
@@ -21,18 +37,121 @@ permissions:
 
 jobs:
   auto-merge:
-    if: github.actor == 'dependabot[bot]'
+    # Only run on CI success (workflow_run for a PR) or review submission.
+    # A failed CI run or a non-PR workflow_run is a no-op.
+    if: >-
+      (github.event_name == 'workflow_run' &&
+         github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.event == 'pull_request') ||
+      github.event_name == 'pull_request_review'
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch dependabot metadata
-        uses: dependabot/fetch-metadata@v2
-        id: metadata
-
-      - name: Enable auto-merge for minor/patch
-        if: >-
-          steps.metadata.outputs.update-type == 'version-update:semver-minor' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-patch'
-        run: gh pr merge --auto --merge "$PR_URL"
+      - name: Resolve PR number
+        id: pr
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            NUM=$(jq -r '.workflow_run.pull_requests[0].number // empty' < "$GITHUB_EVENT_PATH")
+          else
+            NUM='${{ github.event.pull_request.number }}'
+          fi
+          if [ -z "$NUM" ] || [ "$NUM" = "null" ]; then
+            echo "No PR associated with this event; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "number=$NUM" >> "$GITHUB_OUTPUT"
+
+      - name: Gate on author, review, mergeable, CI Gate
+        if: steps.pr.outputs.skip != 'true'
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          DATA=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json author,reviewDecision,mergeable,state,headRefOid)
+          AUTHOR=$(jq -r '.author.login' <<<"$DATA")
+          REVIEW=$(jq -r '.reviewDecision' <<<"$DATA")
+          MERGEABLE=$(jq -r '.mergeable' <<<"$DATA")
+          STATE=$(jq -r '.state' <<<"$DATA")
+          SHA=$(jq -r '.headRefOid' <<<"$DATA")
+
+          echo "author=$AUTHOR review=$REVIEW mergeable=$MERGEABLE state=$STATE sha=$SHA"
+
+          if [ "$AUTHOR" != "app/dependabot" ]; then
+            echo "Not a Dependabot PR; skipping."
+            exit 0
+          fi
+          if [ "$STATE" != "OPEN" ]; then
+            echo "PR not open (state=$STATE); skipping."
+            exit 0
+          fi
+          if [ "$REVIEW" != "APPROVED" ]; then
+            echo "PR not approved (reviewDecision=$REVIEW); skipping."
+            exit 0
+          fi
+          if [ "$MERGEABLE" != "MERGEABLE" ]; then
+            echo "PR not mergeable (mergeable=$MERGEABLE); skipping."
+            exit 0
+          fi
+
+          # Verify the latest run of the caller-specified CI workflow on
+          # the PR head SHA finished `success`. Both triggers need this:
+          # workflow_run guarantees one successful run existed, but the head
+          # SHA may have moved since; pull_request_review has no CI info and
+          # must look it up. Using the workflow's overall conclusion lets us
+          # support consumers without a dedicated aggregator check job — the
+          # conclusion is itself the aggregate (failure if any required job
+          # failed, success if all succeeded or were skipped).
+          WORKFLOW_NAME='${{ inputs.workflow_name }}'
+          CONCL=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&event=pull_request" \
+            --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\")] | sort_by(.run_started_at) | last | .conclusion // \"missing\"")
+          if [ "$CONCL" != "success" ]; then
+            echo "Workflow '$WORKFLOW_NAME' not success on $SHA (conclusion=$CONCL); skipping."
+            exit 0
+          fi
+
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Determine update type from Dependabot commit metadata
+        if: steps.gate.outputs.ok == 'true'
+        id: metadata
+        env:
+          GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          # Dependabot commits embed metadata in the commit message body:
+          #   update-type: version-update:semver-{patch,minor,major}
+          # Grouped PRs contain multiple entries; the effective type is the
+          # highest severity present (major > minor > patch).
+          MSGS=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" --paginate \
+            --jq '.[].commit.message' | tr -d '\r')
+          TYPES=$(grep -oE 'update-type: version-update:semver-(patch|minor|major)' <<<"$MSGS" \
+            | awk -F'semver-' '{print $2}' | sort -u || true)
+          echo "Detected update types: $TYPES"
+          if grep -qx major <<<"$TYPES"; then
+            TYPE=major
+          elif grep -qx minor <<<"$TYPES"; then
+            TYPE=minor
+          elif grep -qx patch <<<"$TYPES"; then
+            TYPE=patch
+          else
+            TYPE=unknown
+          fi
+          echo "Effective update-type: $TYPE"
+          echo "update-type=$TYPE" >> "$GITHUB_OUTPUT"
+
+      - name: Merge minor/patch
+        if: >-
+          steps.metadata.outputs.update-type == 'minor' ||
+          steps.metadata.outputs.update-type == 'patch'
+        env:
+          GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: gh pr merge --merge --repo "$GITHUB_REPOSITORY" "$PR_NUMBER"
