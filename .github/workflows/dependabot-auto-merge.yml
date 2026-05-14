@@ -1,7 +1,8 @@
 name: Dependabot Auto-Merge
 
 # Reusable workflow. Auto-merges minor/patch Dependabot PRs only after
-# the `CI Gate` check has succeeded on the PR's head commit.
+# the caller's CI workflow (`inputs.workflow_name`, default `CI`) has
+# completed with `conclusion=success` on the PR head commit.
 #
 # Triggered (in callers) by `workflow_run` on the CI workflow completing,
 # and by `pull_request_review` on review submission, so the merge fires
@@ -16,6 +17,16 @@ name: Dependabot Auto-Merge
 
 on:
   workflow_call:
+    inputs:
+      workflow_name:
+        description: >-
+          Name of the CI workflow whose latest run on the PR head SHA must
+          have `conclusion=success` before a merge is allowed. The caller
+          should also list this workflow under `on.workflow_run.workflows`.
+          Defaults to `CI` to match `macuject/web`; `macuject/platform` and
+          other consumers with a differently named workflow must override.
+        type: string
+        default: CI
     secrets:
       ORG_TEAM_MEMBERS:
         required: true
@@ -88,14 +99,19 @@ jobs:
             exit 0
           fi
 
-          # Verify CI Gate is success on the PR's head commit. Both triggers
-          # need this: workflow_run guarantees a green CI run existed, but
-          # the head SHA may have moved since; pull_request_review has no CI
-          # info at all and must look it up.
-          CONCL=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs" \
-            --jq '[.check_runs[] | select(.name=="CI Gate")] | sort_by(.completed_at) | last | .conclusion // "missing"')
+          # Verify the latest run of the caller-specified CI workflow on
+          # the PR head SHA finished `success`. Both triggers need this:
+          # workflow_run guarantees one successful run existed, but the head
+          # SHA may have moved since; pull_request_review has no CI info and
+          # must look it up. Using the workflow's overall conclusion lets us
+          # support consumers without a dedicated aggregator check job — the
+          # conclusion is itself the aggregate (failure if any required job
+          # failed, success if all succeeded or were skipped).
+          WORKFLOW_NAME='${{ inputs.workflow_name }}'
+          CONCL=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&event=pull_request" \
+            --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\")] | sort_by(.run_started_at) | last | .conclusion // \"missing\"")
           if [ "$CONCL" != "success" ]; then
-            echo "CI Gate not success on $SHA (conclusion=$CONCL); skipping."
+            echo "Workflow '$WORKFLOW_NAME' not success on $SHA (conclusion=$CONCL); skipping."
             exit 0
           fi
 
