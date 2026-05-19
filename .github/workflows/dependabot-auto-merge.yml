@@ -90,10 +90,31 @@ jobs:
             echo "PR not open (state=$STATE); skipping."
             exit 0
           fi
+
+          # reviewDecision may lag behind the actual review submission by
+          # several seconds due to GitHub API eventual consistency. When the
+          # trigger is pull_request_review we know a review was just submitted,
+          # so retry a few times before giving up. For workflow_run triggers
+          # the review happened earlier, so a single check suffices.
           if [ "$REVIEW" != "APPROVED" ]; then
-            echo "PR not approved (reviewDecision=$REVIEW); skipping."
-            exit 0
+            if [ "${{ github.event_name }}" = "pull_request_review" ]; then
+              echo "reviewDecision not yet APPROVED; retrying (eventual consistency)..."
+              for i in 1 2 3; do
+                sleep 5
+                REVIEW=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                  --json reviewDecision --jq '.reviewDecision')
+                echo "  attempt $i: reviewDecision=$REVIEW"
+                if [ "$REVIEW" = "APPROVED" ]; then
+                  break
+                fi
+              done
+            fi
+            if [ "$REVIEW" != "APPROVED" ]; then
+              echo "PR not approved (reviewDecision=$REVIEW); skipping."
+              exit 0
+            fi
           fi
+
           if [ "$MERGEABLE" != "MERGEABLE" ]; then
             echo "PR not mergeable (mergeable=$MERGEABLE); skipping."
             exit 0
