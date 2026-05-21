@@ -115,6 +115,23 @@ jobs:
             fi
           fi
 
+          # mergeable is computed asynchronously by GitHub and briefly returns
+          # UNKNOWN after the head changes or CI completes (the merge state is
+          # recomputed in the background). When the workflow_run trigger fires
+          # right after CI finishes, we often hit this window. Retry on UNKNOWN
+          # only — CONFLICTING is terminal, retrying won't help.
+          if [ "$MERGEABLE" = "UNKNOWN" ]; then
+            echo "mergeable=UNKNOWN; retrying (eventual consistency)..."
+            for i in 1 2 3 4 5; do
+              sleep 5
+              MERGEABLE=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                --json mergeable --jq '.mergeable')
+              echo "  attempt $i: mergeable=$MERGEABLE"
+              if [ "$MERGEABLE" != "UNKNOWN" ]; then
+                break
+              fi
+            done
+          fi
           if [ "$MERGEABLE" != "MERGEABLE" ]; then
             echo "PR not mergeable (mergeable=$MERGEABLE); skipping."
             exit 0
