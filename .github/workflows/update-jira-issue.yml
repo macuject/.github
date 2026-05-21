@@ -31,13 +31,14 @@ jobs:
 
       - name: Extract issue key and project key from pull request title
         id: extract_keys
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          title="${{ github.event.pull_request.title }}"
           # Extract issue key (first part before the first colon)
-          issue_key=$(echo "$title" | cut -d ':' -f1)
+          issue_key=$(echo "$PR_TITLE" | cut -d ':' -f1)
 
           # Extract project key (first part before the first '-')
-          project_key=$(echo "$title" | cut -d '-' -f1)
+          project_key=$(echo "$PR_TITLE" | cut -d '-' -f1)
 
           echo "issue_key=$issue_key" >> $GITHUB_OUTPUT
           echo "project_key=$project_key" >> $GITHUB_OUTPUT
@@ -124,10 +125,10 @@ jobs:
     steps:
       - name: Validate pull request title
         id: validate_pr_title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          PR_TITLE="${{ github.event.pull_request.title }}"
-          ESCAPED_PR_TITLE=$(echo $PR_TITLE | sed 's/"/\\"/g')
-          if [[ "$ESCAPED_PR_TITLE" =~ ^\[?([A-Z]{2,4}-[0-9]{2,5}(,[[:space:]])?)+\]?:|^([A-Z]{2,4}-[0-9]{2,5}): ]]; then
+          if [[ "$PR_TITLE" =~ ^\[?([A-Z]{2,4}-[0-9]{2,5}(,[[:space:]])?)+\]?:|^([A-Z]{2,4}-[0-9]{2,5}): ]]; then
             echo "PR title is valid"
           else
             echo "Invalid PR title format. It should start with a Jira issue key."
@@ -149,11 +150,11 @@ jobs:
 
       - name: Extract issue key from pull request title
         id: extract_keys
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          title="${{ github.event.pull_request.title }}"
-
           # Extract issue key (first part before the first colon)
-          issue_key=$(echo "$title" | cut -d ':' -f1)
+          issue_key=$(echo "$PR_TITLE" | cut -d ':' -f1)
 
           # Extract project key (first part before the first '-') and remove leading '[' if present (e.g. '[WA-42, WA-23]')
           project_key=$(echo "$issue_key" | cut -d '-' -f1 | sed 's/^\[//')

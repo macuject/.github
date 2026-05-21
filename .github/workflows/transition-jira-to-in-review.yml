@@ -45,9 +45,10 @@ jobs:
     steps:
       - name: Extract issue key from branch name
         id: extract_key
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          PROJECT: ${{ inputs.project }}
         run: |
-          BRANCH="${{ github.event.pull_request.head.ref }}"
-          PROJECT="${{ inputs.project }}"
           ISSUE_KEY=$(echo "$BRANCH" | grep -oE "${PROJECT}-[0-9]+" | head -1)
           if [[ -z "$ISSUE_KEY" ]]; then
             echo "::warning::No Jira issue key found in branch name: $BRANCH"
