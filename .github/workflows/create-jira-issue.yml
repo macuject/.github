@@ -226,12 +226,14 @@ jobs:
           ((steps.mode.outputs.mode == 'full' && steps.create.outputs.issue != '') ||
            (steps.mode.outputs.mode == 'recovery' && steps.recover.outputs.key != ''))
         run: |
-          KEY="${{ steps.create.outputs.issue }}${{ steps.recover.outputs.key }}"
-          gh pr edit ${{ github.event.pull_request.number }} \
-            --title "${KEY}: ${{ github.event.pull_request.title }}"
+          gh pr edit "$PR_NUMBER" \
+            --title "${KEY}: ${PR_TITLE}"
         working-directory: current_repo
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEY: ${{ steps.create.outputs.issue }}${{ steps.recover.outputs.key }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
 
       - name: Add Jira issue link as comment on PR
         if: steps.skip.outcome == 'skipped' && steps.mode.outputs.mode == 'full'
