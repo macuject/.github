@@ -47,7 +47,9 @@ jobs:
     steps:
       # Two paths run here:
       #   full     — create a new Jira issue, transition it, assign reviewer, rename PR, comment.
-      #              Fires on a dependabot 'opened' event, or on a non-dependabot 'labeled with process-existing-pr' event.
+      #              Fires on a dependabot 'opened' event, or on a non-dependabot 'labeled with process-existing-pr' event
+      #              where the PR title does not already start with the project key (prevents duplicate tickets when the
+      #              label is applied to an already-processed PR).
       #   recovery — dependabot stripped the Jira prefix from a previously-renamed PR via force-push.
       #              Recover the existing key from the workflow's prior "Associated Jira issue" comment and re-apply the prefix.
       #              Fires on a dependabot 'synchronize' event when the PR title no longer starts with the project key.
@@ -55,7 +57,7 @@ jobs:
       - name: Skip remaining steps # Run this rather than just skipping the whole job, so that we see a green tick in the PR checks
         if: >- # Specificity is important here to avoid triggering this action multiple times when Dependabot creates then labels a PR
           !((github.actor == 'dependabot[bot]' && github.event_name == 'pull_request' && github.event.action == 'opened') ||
-            (github.actor != 'dependabot[bot]' && github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'process-existing-pr') ||
+            (github.actor != 'dependabot[bot]' && github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'process-existing-pr' && !startsWith(github.event.pull_request.title, format('{0}-', inputs.project))) ||
             (github.actor == 'dependabot[bot]' && github.event_name == 'pull_request' && github.event.action == 'synchronize' && !startsWith(github.event.pull_request.title, format('{0}-', inputs.project))))
         id: skip
         run: echo "Run not needed for this PR, skipping remaining steps"
