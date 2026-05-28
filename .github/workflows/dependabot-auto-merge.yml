@@ -191,6 +191,33 @@ jobs:
             --jq '.[].commit.message' | tr -d '\r')
           TYPES=$(grep -oE 'update-type: version-update:semver-(patch|minor|major)' <<<"$MSGS" \
             | awk -F'semver-' '{print $2}' | sort -u || true)
+
+          # Dependabot omits the `update-type:` metadata line for *indirect*
+          # (transitive) dependency bumps — the commit body only carries
+          # `dependency-name`, `dependency-version`, and `dependency-type:
+          # indirect` (see macuject/web#1835). Derive the classification from
+          # the `Bumps [name](url) from X.Y.Z to A.B.C.` lines Dependabot
+          # always emits, and union with any signal already extracted so
+          # grouped PRs that mix direct and indirect entries pick the highest
+          # severity across both. Pre-release/non-numeric version components
+          # are skipped (rare for indirect deps; falls through to `unknown`).
+          PAIRS=$(grep -oE 'Bumps .+ from [0-9]+\.[0-9]+\.[0-9]+ to [0-9]+\.[0-9]+\.[0-9]+' <<<"$MSGS" || true)
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            OLD=$(awk '{for(i=1;i<=NF;i++) if($i=="from"){print $(i+1); exit}}' <<<"$line")
+            NEW=$(awk '{for(i=1;i<=NF;i++) if($i=="to"){print $(i+1); exit}}' <<<"$line")
+            [[ "$OLD" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+            IFS=. read -r OM OI OP <<<"$OLD"
+            IFS=. read -r NM NI NP <<<"$NEW"
+            if [ "$NM" -gt "$OM" ]; then
+              TYPES="$TYPES"$'\n'major
+            elif [ "$NM" = "$OM" ] && [ "$NI" -gt "$OI" ]; then
+              TYPES="$TYPES"$'\n'minor
+            elif [ "$NM" = "$OM" ] && [ "$NI" = "$OI" ] && [ "$NP" -gt "$OP" ]; then
+              TYPES="$TYPES"$'\n'patch
+            fi
+          done <<< "$PAIRS"
+          TYPES=$(printf '%s\n' "$TYPES" | sort -u | grep -v '^$' || true)
           echo "Detected update types: $TYPES"
           if grep -qx major <<<"$TYPES"; then
             TYPE=major
