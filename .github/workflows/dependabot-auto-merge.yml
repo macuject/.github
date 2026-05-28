@@ -14,6 +14,15 @@ name: Dependabot Auto-Merge
 # and transitions the linked Jira issue to Done). Merges performed by
 # GITHUB_TOKEN do not create new workflow runs — see
 # https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow
+#
+# A second job, `escalate-on-ci-failure`, handles the inverse case: when CI
+# *fails* on a Dependabot PR that automation already auto-approved (Claude
+# labelled it `claude-auto-merge-candidate` and posted an auto-approval review
+# before CI completed), the merge job above is a no-op and the PR would sit
+# orphaned — approved by a bot, red CI, no human looking. This job dismisses the
+# stale approval and routes the PR to a human reviewer. It only runs when the
+# caller passes `team_slug`, so consumers opt in by adding that input to their
+# wrapper (no breakage for callers that haven't adopted it yet).
 
 on:
   workflow_call:
@@ -27,6 +36,16 @@ on:
           other consumers with a differently named workflow must override.
         type: string
         default: CI
+      team_slug:
+        description: >-
+          GitHub team (slug under `macuject`) whose members are eligible
+          reviewers when the `escalate-on-ci-failure` job routes an
+          auto-approved Dependabot PR to a human after CI fails. Optional:
+          when empty (the default) the escalation job is skipped entirely, so
+          existing callers keep working until they opt in by setting this.
+          e.g. `web`, `Platform`.
+        type: string
+        default: ""
     secrets:
       ORG_TEAM_MEMBERS:
         required: true
@@ -193,3 +212,107 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: gh pr merge --merge --repo "$GITHUB_REPOSITORY" "$PR_NUMBER"
+
+  escalate-on-ci-failure:
+    # Inverse of the merge job: when the caller's CI workflow completes with
+    # `conclusion=failure` on a Dependabot PR that automation already
+    # auto-approved, dismiss the stale approval and route the PR to a human.
+    # Gated on `team_slug` so callers opt in (see header comment). Skipped for
+    # CI successes and non-PR runs (the merge job handles successes).
+    if: >-
+      inputs.team_slug != '' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve PR number
+        id: pr
+        run: |
+          set -euo pipefail
+          NUM=$(jq -r '.workflow_run.pull_requests[0].number // empty' < "$GITHUB_EVENT_PATH")
+          if [ -z "$NUM" ] || [ "$NUM" = "null" ]; then
+            echo "No PR associated with this event; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "number=$NUM" >> "$GITHUB_OUTPUT"
+
+      - name: Escalate to human reviewer
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}
+          TEAM_SLUG: ${{ inputs.team_slug }}
+        run: |
+          set -euo pipefail
+
+          DATA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json author,state,labels)
+          AUTHOR=$(jq -r '.author.login' <<<"$DATA")
+          STATE=$(jq -r '.state' <<<"$DATA")
+          LABELS=$(jq -c '[.labels[].name]' <<<"$DATA")
+
+          # Only act on open Dependabot PRs that automation took ownership of
+          # (Claude applied the auto-merge candidate label) and that we have not
+          # already escalated. The sentinel label makes this idempotent: a PR
+          # whose CI fails repeatedly is escalated once, not on every red run.
+          if [ "$AUTHOR" != "app/dependabot" ]; then
+            echo "Not a Dependabot PR (author=$AUTHOR); skipping."; exit 0
+          fi
+          if [ "$STATE" != "OPEN" ]; then
+            echo "PR not open (state=$STATE); skipping."; exit 0
+          fi
+          if ! jq -e 'index("claude-auto-merge-candidate")' <<<"$LABELS" >/dev/null; then
+            echo "PR not an auto-merge candidate (automation never took ownership); skipping."
+            exit 0
+          fi
+          if jq -e 'index("auto-merge-ci-failed")' <<<"$LABELS" >/dev/null; then
+            echo "PR already escalated (auto-merge-ci-failed present); skipping."; exit 0
+          fi
+
+          echo "CI failed on auto-approved Dependabot PR #$PR_NUMBER — escalating to human review."
+
+          # 1. Dismiss the stale automated approval so the PR is no longer
+          #    APPROVED. This prevents the merge job from ever merging on a
+          #    stale approval if CI later goes green on a force-push, and forces
+          #    a fresh human approval. There should be one APPROVED review (the
+          #    org PAT's auto-approval); dismiss any that exist.
+          REVIEW_IDS=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
+            --jq '.[] | select(.state == "APPROVED") | .id')
+          for id in $REVIEW_IDS; do
+            echo "Dismissing stale approval review $id"
+            gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$id/dismissals" \
+              -f message="Auto-approval dismissed: CI failed after auto-approval. This PR needs human review." \
+              -f event=DISMISS >/dev/null
+          done
+
+          # 2. Assign a human reviewer from the caller's team, excluding the PR
+          #    author. The author guard is defensive: a Dependabot PR's author
+          #    is never a team member, but it keeps selection correct if a team
+          #    member ever opens a PR that reaches this path.
+          if ! MEMBERS=$(gh api "orgs/macuject/teams/$TEAM_SLUG/members" --jq '.[].login' 2>&1); then
+            echo "::warning::Failed to fetch members of team '$TEAM_SLUG'"
+            MEMBERS=""
+          fi
+          ELIGIBLE=$(grep -vxF "$AUTHOR" <<<"$MEMBERS" || true)
+          SELECTED=$(grep -v '^$' <<<"$ELIGIBLE" | shuf -n 1 || true)
+          if [ -n "$SELECTED" ]; then
+            echo "Assigning $SELECTED as reviewer"
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-reviewer "$SELECTED"
+          else
+            echo "No eligible individual reviewer; requesting team '$TEAM_SLUG'"
+            gh api -X POST "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
+              --input - <<< "{\"team_reviewers\":[\"$TEAM_SLUG\"]}" \
+              || echo "::warning::Failed to request team review"
+          fi
+
+          # 3. Comment, then 4. add the sentinel label (idempotency guard above).
+          gh pr comment "$PR_NUMBER" --repo "$REPO" \
+            --body "⚠️ Auto-merge cancelled: CI failed after this Dependabot PR was auto-approved. The automated approval has been dismissed and the PR routed to a human reviewer. Please review the CI failure and the changes before merging."
+
+          gh label create "auto-merge-ci-failed" --repo "$REPO" \
+            --color "B60205" \
+            --description "Auto-merge cancelled because CI failed after auto-approval; escalated to human review" \
+            --force >/dev/null 2>&1 || true
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "auto-merge-ci-failed"
