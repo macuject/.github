@@ -62,7 +62,7 @@ jobs:
 
       - name: Checkout code
         if: steps.validate_key.outputs.valid == 'true'
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0 # Fetch all history so that we can get the release branch names
@@ -88,16 +88,16 @@ jobs:
 
       - name: Checkout code from macuject/.github repo
         if: steps.validate_key.outputs.valid == 'true'
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           repository: macuject/.github
           path: reusable
 
       - name: Setup Node.js
         if: steps.validate_key.outputs.valid == 'true'
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v6
         with:
-          node-version: 18
+          node-version: 24
 
       - name: Install dependencies
         if: steps.validate_key.outputs.valid == 'true'
@@ -168,7 +168,7 @@ jobs:
           echo "Project key: ${{ steps.extract_keys.outputs.project_key }}"
 
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0 # Fetch all history so that we can get the release branch names
@@ -190,15 +190,15 @@ jobs:
         run: rm -rf current_repo
 
       - name: Checkout code from macuject/.github repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           repository: macuject/.github
           path: reusable
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v6
         with:
-          node-version: 18
+          node-version: 24
 
       - name: Install dependencies
         run: npm install node-fetch dotenv form-data
@@ -234,7 +234,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Comment on PR about manual Jira transition
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             await github.rest.issues.createComment({
