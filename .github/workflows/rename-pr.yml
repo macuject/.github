@@ -22,16 +22,16 @@ jobs:
       # & check if PR title starts with Jira issue key
       - name: Checkout code from macuject/.github repo
         if: steps.skip.outcome == 'skipped'
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           repository: macuject/.github
           path: reusable
 
       - name: Setup Node.js
         if: steps.skip.outcome == 'skipped'
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v6
         with:
-          node-version: 18
+          node-version: 24
 
       - name: Install dependencies
         if: steps.skip.outcome == 'skipped'
@@ -51,7 +51,7 @@ jobs:
       - name: Checkout code from current repo
         if: >-
           steps.skip.outcome == 'skipped'
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
