@@ -46,6 +46,19 @@ on:
           e.g. `web`, `Platform`.
         type: string
         default: ""
+      autofix_grace_seconds:
+        description: >-
+          Grace window (seconds) the `escalate-on-ci-failure` job waits for a
+          newer commit to land on the PR head before escalating, letting an
+          in-flight auto-fix workflow (e.g. a job that regenerates Sorbet RBIs
+          and pushes them back) supersede the failing run. While the head SHA
+          keeps advancing the failure is treated as transient, not terminal.
+          Optional: defaults to 0, which means no wait and behaviour identical
+          to before this input existed. Independent of this window, a failing
+          run whose commit is no longer the PR head is always treated as stale
+          and skipped.
+        type: number
+        default: 0
     secrets:
       ORG_TEAM_MEMBERS:
         required: true
@@ -272,13 +285,16 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           REPO: ${{ github.repository }}
           TEAM_SLUG: ${{ inputs.team_slug }}
+          FAILED_SHA: ${{ github.event.workflow_run.head_sha }}
+          GRACE: ${{ inputs.autofix_grace_seconds }}
         run: |
           set -euo pipefail
 
-          DATA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json author,state,labels)
+          DATA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json author,state,labels,headRefOid)
           AUTHOR=$(jq -r '.author.login' <<<"$DATA")
           STATE=$(jq -r '.state' <<<"$DATA")
           LABELS=$(jq -c '[.labels[].name]' <<<"$DATA")
+          CURRENT_SHA=$(jq -r '.headRefOid' <<<"$DATA")
 
           # Only act on open Dependabot PRs that automation took ownership of
           # (Claude applied the auto-merge candidate label) and that we have not
@@ -296,6 +312,32 @@ jobs:
           fi
           if jq -e 'index("auto-merge-ci-failed")' <<<"$LABELS" >/dev/null; then
             echo "PR already escalated (auto-merge-ci-failed present); skipping."; exit 0
+          fi
+
+          # Stale-run / auto-fix guard. The failing run was for commit FAILED_SHA.
+          # If the PR head has since moved on, a newer commit exists — pushed by a
+          # human or by an auto-fix workflow — and that commit will produce its own
+          # CI verdict (re-firing this job if it also fails). Escalating off the old
+          # run would dismiss the approval and ping a human for a failure that has
+          # already been superseded. When autofix_grace_seconds > 0 the caller has
+          # an auto-fix that pushes asynchronously, so wait briefly for the head to
+          # advance before deciding. With the default of 0 there is no wait and the
+          # check below collapses to a single stale-vs-current comparison.
+          if [ "${GRACE:-0}" -gt 0 ] && [ "$CURRENT_SHA" = "$FAILED_SHA" ]; then
+            echo "Grace window ${GRACE}s: waiting for an auto-fix to supersede $FAILED_SHA..."
+            elapsed=0
+            while [ "$elapsed" -lt "$GRACE" ]; do
+              sleep 15; elapsed=$((elapsed + 15))
+              CURRENT_SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')
+              if [ "$CURRENT_SHA" != "$FAILED_SHA" ]; then
+                echo "Head advanced to $CURRENT_SHA after ${elapsed}s; auto-fix in flight."
+                break
+              fi
+            done
+          fi
+          if [ -n "$FAILED_SHA" ] && [ "$CURRENT_SHA" != "$FAILED_SHA" ]; then
+            echo "Failing run was on $FAILED_SHA but PR head is now $CURRENT_SHA; run is stale, skipping escalation."
+            exit 0
           fi
 
           echo "CI failed on auto-approved Dependabot PR #$PR_NUMBER — escalating to human review."
