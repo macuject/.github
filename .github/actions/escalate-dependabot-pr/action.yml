@@ -1,9 +1,9 @@
 name: Escalate Dependabot PR to human review
 description: >-
-  Shared escalation primitive for the Dependabot auto-merge automation. Waits for
-  any in-flight auto-fix to supersede the triggering commit, optionally dismisses a
-  stale automated approval, assigns a human reviewer from the caller's team, posts a
-  comment, and stamps an idempotency sentinel so a PR is escalated at most once.
+  Shared escalation steps for the Dependabot auto-merge automation. Waits for any
+  in-flight auto-fix to supersede the triggering commit, optionally dismisses a stale
+  automated approval, assigns a human reviewer from the caller's team, posts a comment,
+  and adds a label marking the PR as escalated so this only happens once.
 
 inputs:
   pr_number:
@@ -47,7 +47,9 @@ inputs:
     required: false
     default: "false"
   sentinel_label:
-    description: Label applied after escalation; also the idempotency guard.
+    description: >-
+      Label added after escalating. It is also checked first: if the PR already
+      has it, this action does nothing — so a PR is escalated only once.
     required: false
     default: dependabot-escalated-to-human
   exclude_members:
@@ -127,8 +129,8 @@ runs:
           done
         fi
 
-        # 2. Assign a human reviewer, unless one is already requested (idempotent —
-        #    avoids a duplicate when another path assigned first). The author guard
+        # 2. Assign a human reviewer, unless one is already requested (avoids a
+        #    duplicate when another path assigned first). The author guard
         #    is defensive: a Dependabot PR's author is never a team member.
         EXISTING=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
           --json reviewRequests --jq '.reviewRequests | length' 2>/dev/null || echo 0)
@@ -162,7 +164,7 @@ runs:
           fi
         fi
 
-        # 3. Comment, then 4. stamp the idempotency sentinel.
+        # 3. Comment, then 4. add the "already escalated" label (checked above).
         gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$COMMENT_BODY"
 
         gh label create "$SENTINEL" --repo "$REPO" \
