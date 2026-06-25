@@ -477,16 +477,13 @@ jobs:
           gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "auto-merge-ci-failed"
 
   escalate-needs-human:
-    # The non-auto-approved counterpart to `escalate-on-ci-failure`. A Dependabot
-    # PR that automation did NOT take ownership of — because the Claude review found
-    # concerns, the bump is a major, or the review could not run — needs a human, but
-    # the summons must wait until the head is stable so an in-flight auto-fix (e.g.
-    # the RBI sync) is not mistaken for a dead PR and the comment is not buried under
-    # the auto-fix's own updates. The caller's review step records the decision by
-    # labelling the PR `needs-human-review`; this job, driven by CI completion (any
-    # conclusion), carries it out once on the settled head. Gated on `team_slug` so
-    # callers opt in; keyed on a caller-applied label so consumers that don't apply
-    # it are unaffected.
+    # The non-auto-approved counterpart to `escalate-on-ci-failure`. When the caller's
+    # review step flags a Dependabot PR for a human (label `needs-human-review`) instead
+    # of auto-approving it, the summons must still wait until the head is stable, so an
+    # in-flight auto-fix (e.g. the RBI sync) isn't mistaken for a dead PR and the comment
+    # isn't buried under the auto-fix's own updates. Driven by CI completion (any
+    # conclusion). Gated on `team_slug` so callers opt in; keyed on the caller-applied
+    # label so consumers that don't set it are unaffected.
     if: >-
       inputs.team_slug != '' &&
       github.event_name == 'workflow_run' &&
