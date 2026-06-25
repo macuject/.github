@@ -59,6 +59,24 @@ on:
           and skipped.
         type: number
         default: 0
+      autofix_paths:
+        description: >-
+          Path prefix the auto-fix workflow is allowed to touch (e.g.
+          `sorbet/rbi/`). When commits land after the automated approval, the
+          merge proceeds on that approval ONLY if every such commit was authored
+          by `github-actions[bot]` and changes files solely under this prefix —
+          i.e. it is the in-flight auto-fix, not unreviewed code. Anything else
+          pushed after approval blocks the merge and routes the PR to a human.
+          Optional: when empty (the default) ANY commit after the approval blocks
+          the merge — the safe default for consumers without an auto-fix.
+        type: string
+        default: ""
+      exclude_reviewers:
+        description: >-
+          Comma-separated team members never to assign as a human reviewer when a
+          PR is escalated (e.g. bot accounts that belong to the team). Optional.
+        type: string
+        default: ""
     secrets:
       ORG_TEAM_MEMBERS:
         required: true
@@ -244,10 +262,82 @@ jobs:
           echo "Effective update-type: $TYPE"
           echo "update-type=$TYPE" >> "$GITHUB_OUTPUT"
 
-      - name: Merge minor/patch
+      - name: Verify nothing unreviewed landed after the approval
+        # An approval persists across pushes (`require_last_push_approval: false`
+        # on the ruleset), so a commit pushed after the automated approval would
+        # otherwise merge unreviewed. Allow exactly one exception: the in-flight
+        # auto-fix (commits authored by github-actions[bot] touching only
+        # `autofix_paths`). Anything else after the approval blocks the merge.
         if: >-
-          steps.metadata.outputs.update-type == 'minor' ||
-          steps.metadata.outputs.update-type == 'patch'
+          steps.gate.outputs.ok == 'true' &&
+          (steps.metadata.outputs.update-type == 'minor' ||
+           steps.metadata.outputs.update-type == 'patch')
+        id: postapproval
+        env:
+          GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.gate.outputs.sha }}
+          AUTOFIX_PATHS: ${{ inputs.autofix_paths }}
+        run: |
+          set -euo pipefail
+
+          # The commit the standing approval was submitted against. With no
+          # APPROVED review the gate would not have passed, so this is set.
+          APPROVED_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --paginate \
+            --jq '[.[] | select(.state == "APPROVED")] | last | .commit_id // ""')
+          if [ -z "$APPROVED_SHA" ]; then
+            echo "Could not resolve the approved commit; blocking merge as a precaution."
+            echo "block=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$APPROVED_SHA" = "$HEAD_SHA" ]; then
+            echo "Head $HEAD_SHA is the approved commit; nothing landed after approval."
+            echo "block=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # Everything between the approved commit and the head must be the
+          # auto-fix: authored by github-actions[bot] and confined to AUTOFIX_PATHS.
+          CMP=$(gh api "repos/$GITHUB_REPOSITORY/compare/$APPROVED_SHA...$HEAD_SHA")
+          NON_BOT=$(jq -r '[.commits[] | select(.commit.author.name != "github-actions[bot]")] | length' <<<"$CMP")
+          # `files` is omitted/truncated for very large compares; absence ⇒ cannot
+          # confirm the diff is confined, so treat as out-of-scope (block).
+          if [ -z "$AUTOFIX_PATHS" ]; then
+            OUTSIDE=1
+          else
+            OUTSIDE=$(jq -r --arg p "$AUTOFIX_PATHS" \
+              '[(.files // [{}])[] | select((.filename // "x") | startswith($p) | not)] | length' <<<"$CMP")
+          fi
+
+          if [ "$NON_BOT" -eq 0 ] && [ "$OUTSIDE" -eq 0 ]; then
+            echo "Post-approval commits are auto-fix-only ($APPROVED_SHA...$HEAD_SHA); merge may proceed on the existing approval."
+            echo "block=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Commits landed after approval that are NOT the auto-fix (non-bot=$NON_BOT, outside-paths=$OUTSIDE); blocking merge."
+            echo "block=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Route post-approval drift to human review
+        if: steps.postapproval.outputs.block == 'true'
+        uses: macuject/.github/.github/actions/escalate-dependabot-pr@main
+        with:
+          pr_number: ${{ steps.pr.outputs.number }}
+          repo: ${{ github.repository }}
+          team_slug: ${{ inputs.team_slug }}
+          org_token: ${{ secrets.ORG_TEAM_MEMBERS }}
+          dismiss_approval: "true"
+          exclude_members: ${{ inputs.exclude_reviewers }}
+          comment_body: >-
+            ⚠️ Auto-merge cancelled: commits were pushed after this Dependabot PR
+            was automatically approved that are not the expected auto-fix. The
+            automated approval has been dismissed and the PR routed to a human
+            reviewer. Please review the new commits before merging.
+
+      - name: Merge minor/patch
+        # Require an explicit `block=false`: if the post-approval check errored
+        # (empty output), do NOT merge — fail safe rather than merge unverified.
+        if: >-
+          (steps.metadata.outputs.update-type == 'minor' ||
+           steps.metadata.outputs.update-type == 'patch') &&
+          steps.postapproval.outputs.block == 'false'
         env:
           GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
@@ -385,3 +475,105 @@ jobs:
             --description "Auto-merge cancelled because CI failed after auto-approval; escalated to human review" \
             --force >/dev/null 2>&1 || true
           gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "auto-merge-ci-failed"
+
+  escalate-needs-human:
+    # The non-auto-approved counterpart to `escalate-on-ci-failure`. A Dependabot
+    # PR that automation did NOT take ownership of — because the Claude review found
+    # concerns, the bump is a major, or the review could not run — needs a human, but
+    # the summons must wait until the head is stable so an in-flight auto-fix (e.g.
+    # the RBI sync) is not mistaken for a dead PR and the comment is not buried under
+    # the auto-fix's own updates. The caller's review step records the decision by
+    # labelling the PR `needs-human-review`; this job, driven by CI completion (any
+    # conclusion), carries it out once on the settled head. Gated on `team_slug` so
+    # callers opt in; keyed on a caller-applied label so consumers that don't apply
+    # it are unaffected.
+    if: >-
+      inputs.team_slug != '' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve PR number
+        id: pr
+        run: |
+          set -euo pipefail
+          NUM=$(jq -r '.workflow_run.pull_requests[0].number // empty' < "$GITHUB_EVENT_PATH")
+          if [ -z "$NUM" ] || [ "$NUM" = "null" ]; then
+            echo "No PR associated with this event; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "number=$NUM" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the review to settle and classify
+        if: steps.pr.outputs.skip != 'true'
+        id: classify
+        env:
+          GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+
+          read_state() {
+            DATA=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json author,state,labels)
+            AUTHOR=$(jq -r '.author.login' <<<"$DATA")
+            STATE=$(jq -r '.state' <<<"$DATA")
+            LABELS=$(jq -c '[.labels[].name]' <<<"$DATA")
+          }
+          has() { jq -e --arg l "$1" 'index($l)' <<<"$LABELS" >/dev/null; }
+
+          read_state
+          if [ "$AUTHOR" != "app/dependabot" ]; then
+            echo "Not a Dependabot PR (author=$AUTHOR); skipping."
+            echo "escalate=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$STATE" != "OPEN" ]; then
+            echo "PR not open (state=$STATE); skipping."
+            echo "escalate=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # The review (which applies the candidate or needs-human-review label)
+          # runs in parallel with CI and may not have settled when CI completes.
+          # Wait briefly for a verdict label before deciding. Already-settled PRs
+          # (the common case — the review finishes before CI) break out at once.
+          for i in $(seq 1 12); do
+            if has "claude-auto-merge-candidate" || has "needs-human-review"; then break; fi
+            sleep 15
+            read_state
+          done
+
+          if has "claude-auto-merge-candidate"; then
+            echo "PR is an auto-merge candidate; the merge / ci-failure paths own it."
+            echo "escalate=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # needs-human-review present, or the review never settled (treat a stuck
+          # review as unavailable — a human is still needed). Pick the comment.
+          if has "needs-human-review"; then
+            echo "PR labelled needs-human-review."
+          else
+            echo "Review did not settle within the wait; treating as review-unavailable."
+          fi
+          if has "claude-review-unavailable" || ! has "needs-human-review"; then
+            COMMENT="⚠️ This Dependabot PR needs human review: the automated code review could not run, so it was not eligible for auto-merge. A reviewer has been assigned — please review the changes before merging."
+          else
+            COMMENT="⚠️ This Dependabot PR needs human review: the automated code review did not clear it for auto-merge. A reviewer has been assigned — please review the Claude review comments and the changes before merging."
+          fi
+          echo "escalate=true" >> "$GITHUB_OUTPUT"
+          { echo "comment<<EOF"; echo "$COMMENT"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+      - name: Escalate to human reviewer
+        if: steps.classify.outputs.escalate == 'true'
+        uses: macuject/.github/.github/actions/escalate-dependabot-pr@main
+        with:
+          pr_number: ${{ steps.pr.outputs.number }}
+          repo: ${{ github.repository }}
+          team_slug: ${{ inputs.team_slug }}
+          org_token: ${{ secrets.ORG_TEAM_MEMBERS }}
+          failed_sha: ${{ github.event.workflow_run.head_sha }}
+          grace_seconds: ${{ inputs.autofix_grace_seconds }}
+          dismiss_approval: "false"
+          sentinel_label: needs-human-review-requested
+          exclude_members: ${{ inputs.exclude_reviewers }}
+          comment_body: ${{ steps.classify.outputs.comment }}
