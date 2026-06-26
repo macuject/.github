@@ -283,8 +283,12 @@ jobs:
 
           # The commit the standing approval was submitted against. With no
           # APPROVED review the gate would not have passed, so this is set.
+          # `--paginate` runs the jq filter per page, so a cross-page reduction
+          # like `last` would yield one value per page. Emit each APPROVED
+          # commit_id (oldest to newest) and take the final line — the most
+          # recent approval.
           APPROVED_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --paginate \
-            --jq '[.[] | select(.state == "APPROVED")] | last | .commit_id // ""')
+            --jq '.[] | select(.state == "APPROVED") | .commit_id' | tail -n1)
           if [ -z "$APPROVED_SHA" ]; then
             echo "Could not resolve the approved commit; blocking merge as a precaution."
             echo "block=true" >> "$GITHUB_OUTPUT"; exit 0
@@ -296,8 +300,12 @@ jobs:
 
           # Everything between the approved commit and the head must be the
           # auto-fix: authored by github-actions[bot] and confined to AUTOFIX_PATHS.
+          # Use the GitHub-native author identity (`author.login`), not the git
+          # `commit.author.name` — the latter is set by the committing workflow's
+          # config and is spoofable, so a consumer whose auto-fix sets a different
+          # name would silently fail closed (every post-approval commit blocked).
           CMP=$(gh api "repos/$GITHUB_REPOSITORY/compare/$APPROVED_SHA...$HEAD_SHA")
-          NON_BOT=$(jq -r '[.commits[] | select(.commit.author.name != "github-actions[bot]")] | length' <<<"$CMP")
+          NON_BOT=$(jq -r '[.commits[] | select((.author.login // "") != "github-actions[bot]")] | length' <<<"$CMP")
           # `files` is omitted/truncated for very large compares; absence ⇒ cannot
           # confirm the diff is confined, so treat as out-of-scope (block).
           if [ -z "$AUTOFIX_PATHS" ]; then
@@ -478,12 +486,15 @@ jobs:
 
   escalate-needs-human:
     # The non-auto-approved counterpart to `escalate-on-ci-failure`. When the caller's
-    # review step flags a Dependabot PR for a human (label `needs-human-review`) instead
-    # of auto-approving it, the summons must still wait until the head is stable, so an
-    # in-flight auto-fix (e.g. the RBI sync) isn't mistaken for a dead PR and the comment
-    # isn't buried under the auto-fix's own updates. Driven by CI completion (any
-    # conclusion). Gated on `team_slug` so callers opt in; keyed on the caller-applied
-    # label so consumers that don't set it are unaffected.
+    # review step flags a Dependabot PR for a human (label `needs-human-review`, or
+    # `claude-review-unavailable` when the review could not run) instead of auto-approving
+    # it, the summons must still wait until the head is stable, so an in-flight auto-fix
+    # (e.g. the RBI sync) isn't mistaken for a dead PR and the comment isn't buried under
+    # the auto-fix's own updates. Driven by CI completion (any conclusion). Gated on
+    # `team_slug` so callers opt in, and escalates only when one of those verdict labels
+    # is present — a PR with no verdict label (a consumer that doesn't label, or a review
+    # still in flight) is left untouched, never summoned merely for lacking the candidate
+    # label.
     if: >-
       inputs.team_slug != '' &&
       github.event_name == 'workflow_run' &&
@@ -530,12 +541,13 @@ jobs:
             echo "escalate=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          # The review (which applies the candidate or needs-human-review label)
-          # runs in parallel with CI and may not have settled when CI completes.
-          # Wait briefly for a verdict label before deciding. Already-settled PRs
-          # (the common case — the review finishes before CI) break out at once.
+          # The review runs in parallel with CI and may not have applied its
+          # verdict label when CI completes. Wait briefly for one of the three
+          # verdict labels before deciding. Already-settled PRs (the common case —
+          # the review finishes before CI) break out at once.
           for i in $(seq 1 12); do
-            if has "claude-auto-merge-candidate" || has "needs-human-review"; then break; fi
+            if has "claude-auto-merge-candidate" || has "needs-human-review" \
+               || has "claude-review-unavailable"; then break; fi
             sleep 15
             read_state
           done
@@ -545,16 +557,25 @@ jobs:
             echo "escalate=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          # needs-human-review present, or the review never settled (treat a stuck
-          # review as unavailable — a human is still needed). Pick the comment.
-          if has "needs-human-review"; then
-            echo "PR labelled needs-human-review."
-          else
-            echo "Review did not settle within the wait; treating as review-unavailable."
+          # Escalate ONLY on an explicit human-needed verdict from the caller's
+          # review (`needs-human-review`, or `claude-review-unavailable` when the
+          # review could not run). The mere absence of the candidate label is NOT
+          # sufficient: a review still in flight, or a consumer that doesn't label
+          # its Dependabot PRs, must not trigger a summons — that is the premature/
+          # unwarranted summons this work removes. Such PRs are left untouched here
+          # (not auto-merged, not escalated).
+          if ! has "needs-human-review" && ! has "claude-review-unavailable"; then
+            echo "No human-needed verdict label present; nothing to escalate."
+            echo "escalate=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if has "claude-review-unavailable" || ! has "needs-human-review"; then
+
+          # Pick the comment. `claude-review-unavailable` (the review could not run)
+          # takes precedence over `needs-human-review` for wording.
+          if has "claude-review-unavailable"; then
+            echo "PR labelled claude-review-unavailable."
             COMMENT="⚠️ This Dependabot PR needs human review: the automated code review could not run, so it was not eligible for auto-merge. A reviewer has been assigned — please review the changes before merging."
           else
+            echo "PR labelled needs-human-review."
             COMMENT="⚠️ This Dependabot PR needs human review: the automated code review did not clear it for auto-merge. A reviewer has been assigned — please review the Claude review comments and the changes before merging."
           fi
           echo "escalate=true" >> "$GITHUB_OUTPUT"
