@@ -1,0 +1,174 @@
+name: Escalate Dependabot PR to human review
+description: >-
+  Shared escalation steps for the Dependabot auto-merge automation. Waits for any
+  in-flight auto-fix to supersede the triggering commit, optionally dismisses a stale
+  automated approval, assigns a human reviewer from the caller's team, posts a comment,
+  and adds a label marking the PR as escalated so this only happens once.
+
+inputs:
+  pr_number:
+    description: Pull request number to escalate.
+    required: true
+  repo:
+    description: owner/name of the repository the PR lives in.
+    required: true
+  team_slug:
+    description: GitHub team (slug under `macuject`) whose members are eligible reviewers.
+    required: true
+  org_token:
+    description: >-
+      PAT with org/team read and repo write. Used for all API calls so the
+      resulting events are visible to other workflows (GITHUB_TOKEN-authored
+      events are swallowed to prevent recursive runs).
+    required: true
+  comment_body:
+    description: Body of the comment posted when escalation actually happens.
+    required: true
+  failed_sha:
+    description: >-
+      Head SHA the triggering run was for. When set, escalation is skipped if the
+      PR head has since advanced (a newer commit — human or auto-fix — will produce
+      its own verdict). Leave empty to escalate against the current head with no
+      stale check (e.g. when called synchronously at merge time).
+    required: false
+    default: ""
+  grace_seconds:
+    description: >-
+      Seconds to wait for the head to advance past `failed_sha` before escalating,
+      letting an in-flight auto-fix supersede the triggering run. Ignored when
+      `failed_sha` is empty. Defaults to 0 (no wait).
+    required: false
+    default: "0"
+  dismiss_approval:
+    description: >-
+      When 'true', dismiss any existing APPROVED reviews before assigning a human
+      (used when an automated approval has gone stale). When 'false', leave reviews
+      untouched (used when the PR was never auto-approved).
+    required: false
+    default: "false"
+  sentinel_label:
+    description: >-
+      Label added after escalating. It is also checked first: if the PR already
+      has it, this action does nothing — so a PR is escalated only once.
+    required: false
+    default: dependabot-escalated-to-human
+  exclude_members:
+    description: Comma-separated team members to exclude from reviewer selection.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Escalate
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.org_token }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        REPO: ${{ inputs.repo }}
+        TEAM_SLUG: ${{ inputs.team_slug }}
+        COMMENT_BODY: ${{ inputs.comment_body }}
+        FAILED_SHA: ${{ inputs.failed_sha }}
+        GRACE: ${{ inputs.grace_seconds }}
+        DISMISS_APPROVAL: ${{ inputs.dismiss_approval }}
+        SENTINEL: ${{ inputs.sentinel_label }}
+        EXCLUDE_MEMBERS: ${{ inputs.exclude_members }}
+      run: |
+        set -euo pipefail
+
+        DATA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json author,state,labels,headRefOid)
+        AUTHOR=$(jq -r '.author.login' <<<"$DATA")
+        STATE=$(jq -r '.state' <<<"$DATA")
+        LABELS=$(jq -c '[.labels[].name]' <<<"$DATA")
+        CURRENT_SHA=$(jq -r '.headRefOid' <<<"$DATA")
+
+        if [ "$STATE" != "OPEN" ]; then
+          echo "PR #$PR_NUMBER not open (state=$STATE); skipping."; exit 0
+        fi
+        if jq -e --arg s "$SENTINEL" 'index($s)' <<<"$LABELS" >/dev/null; then
+          echo "PR #$PR_NUMBER already escalated ($SENTINEL present); skipping."; exit 0
+        fi
+
+        # Stale-run / auto-fix guard. The triggering run was for FAILED_SHA. If the
+        # head has since moved, a newer commit (human or auto-fix) exists and will
+        # produce its own verdict — escalating off the old run would summon a human
+        # for a failure already superseded. When GRACE > 0 the caller has an auto-fix
+        # that pushes asynchronously, so wait briefly for the head to advance first.
+        if [ -n "$FAILED_SHA" ]; then
+          if [ "${GRACE:-0}" -gt 0 ] && [ "$CURRENT_SHA" = "$FAILED_SHA" ]; then
+            echo "Grace window ${GRACE}s: waiting for an auto-fix to supersede $FAILED_SHA..."
+            elapsed=0
+            while [ "$elapsed" -lt "$GRACE" ]; do
+              sleep 15; elapsed=$((elapsed + 15))
+              CURRENT_SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')
+              if [ "$CURRENT_SHA" != "$FAILED_SHA" ]; then
+                echo "Head advanced to $CURRENT_SHA after ${elapsed}s; auto-fix in flight."
+                break
+              fi
+            done
+          fi
+          if [ "$CURRENT_SHA" != "$FAILED_SHA" ]; then
+            echo "Triggering run was on $FAILED_SHA but head is now $CURRENT_SHA; run is stale, skipping."
+            exit 0
+          fi
+        fi
+
+        echo "Escalating Dependabot PR #$PR_NUMBER to human review."
+
+        # 1. Optionally dismiss a stale automated approval so the PR is no longer
+        #    APPROVED — prevents a merge on an approval that no longer reflects the
+        #    head, and forces a fresh human approval.
+        if [ "$DISMISS_APPROVAL" = "true" ]; then
+          REVIEW_IDS=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
+            --jq '.[] | select(.state == "APPROVED") | .id')
+          for id in $REVIEW_IDS; do
+            echo "Dismissing stale approval review $id"
+            gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$id/dismissals" \
+              -f message="Automated approval dismissed: this PR needs human review." \
+              -f event=DISMISS >/dev/null
+          done
+        fi
+
+        # 2. Assign a human reviewer, unless one is already requested (avoids a
+        #    duplicate when another path assigned first). The author guard
+        #    is defensive: a Dependabot PR's author is never a team member.
+        EXISTING=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+          --json reviewRequests --jq '.reviewRequests | length' 2>/dev/null || echo 0)
+        if [ "${EXISTING:-0}" -gt 0 ]; then
+          echo "Reviewer(s) already requested ($EXISTING); skipping assignment."
+        else
+          if ! MEMBERS=$(gh api "orgs/macuject/teams/$TEAM_SLUG/members" --jq '.[].login' 2>&1); then
+            echo "::warning::Failed to fetch members of team '$TEAM_SLUG'"
+            MEMBERS=""
+          fi
+          ELIGIBLE=""
+          IFS=',' read -ra EXCLUDED <<< "$EXCLUDE_MEMBERS"
+          while IFS= read -r member; do
+            [ -z "$member" ] && continue
+            SKIP=false
+            [ "$member" = "$AUTHOR" ] && SKIP=true
+            for ex in "${EXCLUDED[@]}"; do
+              [ "$member" = "$(echo "$ex" | xargs)" ] && SKIP=true
+            done
+            [ "$SKIP" = "false" ] && ELIGIBLE="$ELIGIBLE $member"
+          done <<< "$MEMBERS"
+          SELECTED=$(echo $ELIGIBLE | tr ' ' '\n' | grep -v '^$' | shuf -n 1 || true)
+          if [ -n "$SELECTED" ]; then
+            echo "Assigning $SELECTED as reviewer"
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-reviewer "$SELECTED"
+          else
+            echo "No eligible individual reviewer; requesting team '$TEAM_SLUG'"
+            gh api -X POST "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
+              --input - <<< "{\"team_reviewers\":[\"$TEAM_SLUG\"]}" \
+              || echo "::warning::Failed to request team review"
+          fi
+        fi
+
+        # 3. Comment, then 4. add the "already escalated" label (checked above).
+        gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$COMMENT_BODY"
+
+        gh label create "$SENTINEL" --repo "$REPO" \
+          --color "B60205" \
+          --description "Dependabot PR escalated to human review by auto-merge automation" \
+          --force >/dev/null 2>&1 || true
+        gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$SENTINEL"
