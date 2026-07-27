@@ -16,10 +16,11 @@ name: Dependabot Auto-Merge
 # https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow
 #
 # A second job, `escalate-on-ci-failure`, handles the inverse case: when CI
-# *fails* on a Dependabot PR that automation already auto-approved (Claude
-# labelled it `claude-auto-merge-candidate` and posted an auto-approval review
-# before CI completed), the merge job above is a no-op and the PR would sit
-# orphaned — approved by a bot, red CI, no human looking. This job dismisses the
+# does not succeed — `failure`, or `cancelled`/`timed_out` (e.g. a run killed at
+# GitHub's 6h job ceiling) — on a Dependabot PR that automation already
+# auto-approved (Claude labelled it `claude-auto-merge-candidate` and posted an
+# auto-approval review before CI completed), the merge job above is a no-op and
+# the PR would sit orphaned — approved by a bot, red CI, no human looking. This job dismisses the
 # stale approval and routes the PR to a human reviewer. It only runs when the
 # caller passes `team_slug`, so consumers opt in by adding that input to their
 # wrapper (no breakage for callers that haven't adopted it yet).
@@ -352,15 +353,20 @@ jobs:
         run: gh pr merge --merge --repo "$GITHUB_REPOSITORY" "$PR_NUMBER"
 
   escalate-on-ci-failure:
-    # Inverse of the merge job: when the caller's CI workflow completes with
-    # `conclusion=failure` on a Dependabot PR that automation already
-    # auto-approved, dismiss the stale approval and route the PR to a human.
+    # Inverse of the merge job: when the caller's CI workflow completes without
+    # success on a Dependabot PR that automation already auto-approved, dismiss
+    # the stale approval and route the PR to a human. `cancelled` and `timed_out`
+    # are treated the same as `failure`: a run killed at GitHub's 6h job ceiling
+    # concludes `cancelled`, not `failure`, and must not be allowed to slip
+    # through and leave the PR bot-approved with red CI and no human looking.
+    # (The shared action's stale-SHA guard skips a `cancelled` run that was merely
+    # superseded by a newer push, so this only escalates genuinely stuck runs.)
     # Gated on `team_slug` so callers opt in (see header comment). Skipped for
     # CI successes and non-PR runs (the merge job handles successes).
     if: >-
       inputs.team_slug != '' &&
       github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'failure' &&
+      contains(fromJSON('["failure", "cancelled", "timed_out"]'), github.event.workflow_run.conclusion) &&
       github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     steps:
