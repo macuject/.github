@@ -228,26 +228,45 @@ jobs:
           # (transitive) dependency bumps — the commit body only carries
           # `dependency-name`, `dependency-version`, and `dependency-type:
           # indirect` (see macuject/web#1835). Derive the classification from
-          # the `Bumps [name](url) from X.Y.Z to A.B.C.` lines Dependabot
-          # always emits, and union with any signal already extracted so
-          # grouped PRs that mix direct and indirect entries pick the highest
-          # severity across both. Pre-release/non-numeric version components
-          # are skipped (rare for indirect deps; falls through to `unknown`).
-          PAIRS=$(grep -oE 'Bumps .+ from [0-9]+\.[0-9]+\.[0-9]+ to [0-9]+\.[0-9]+\.[0-9]+' <<<"$MSGS" || true)
+          # the `Bumps [name](url) from OLD to NEW.` lines Dependabot always
+          # emits, and union with any signal already extracted so grouped PRs
+          # that mix direct and indirect entries pick the highest severity
+          # across both. Non-numeric versions fail the numeric-dotted guard
+          # below and fall through to `unknown` (fail safe, never auto-merged).
+
+          # Classify an OLD->NEW bump by the first version segment that
+          # differs: segment 0 -> major, 1 -> minor, 2+ -> patch. Compares any
+          # number of numeric segments, zero-padding the shorter side, so
+          # 4-segment versions such as Rails security patches (8.1.3 -> 8.1.3.1,
+          # a patch) classify correctly rather than falling through to
+          # `unknown` (see macuject/web#2155). Only an upward bump is
+          # classified; a downgrade or an all-equal pair emits nothing.
+          classify() {
+            local o n; IFS=. read -ra o <<<"$1"; IFS=. read -ra n <<<"$2"
+            local len=${#o[@]}; [ "${#n[@]}" -gt "$len" ] && len=${#n[@]}
+            local i ov nv
+            for ((i = 0; i < len; i++)); do
+              ov=${o[i]:-0}; nv=${n[i]:-0}
+              if [ "$nv" -gt "$ov" ]; then
+                if   [ "$i" -eq 0 ]; then echo major
+                elif [ "$i" -eq 1 ]; then echo minor
+                else echo patch
+                fi
+                return
+              elif [ "$nv" -lt "$ov" ]; then
+                return
+              fi
+            done
+          }
+
+          PAIRS=$(grep -oE 'Bumps .+ from [0-9]+(\.[0-9]+)+ to [0-9]+(\.[0-9]+)+' <<<"$MSGS" || true)
           while IFS= read -r line; do
             [ -z "$line" ] && continue
             OLD=$(awk '{for(i=1;i<=NF;i++) if($i=="from"){print $(i+1); exit}}' <<<"$line")
             NEW=$(awk '{for(i=1;i<=NF;i++) if($i=="to"){print $(i+1); exit}}' <<<"$line")
-            [[ "$OLD" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
-            IFS=. read -r OM OI OP <<<"$OLD"
-            IFS=. read -r NM NI NP <<<"$NEW"
-            if [ "$NM" -gt "$OM" ]; then
-              TYPES="$TYPES"$'\n'major
-            elif [ "$NM" = "$OM" ] && [ "$NI" -gt "$OI" ]; then
-              TYPES="$TYPES"$'\n'minor
-            elif [ "$NM" = "$OM" ] && [ "$NI" = "$OI" ] && [ "$NP" -gt "$OP" ]; then
-              TYPES="$TYPES"$'\n'patch
-            fi
+            [[ "$OLD" =~ ^[0-9]+(\.[0-9]+)+$ && "$NEW" =~ ^[0-9]+(\.[0-9]+)+$ ]] || continue
+            DELTA=$(classify "$OLD" "$NEW")
+            [ -n "$DELTA" ] && TYPES="$TYPES"$'\n'"$DELTA"
           done <<< "$PAIRS"
           TYPES=$(printf '%s\n' "$TYPES" | sort -u | grep -v '^$' || true)
           echo "Detected update types: $TYPES"
