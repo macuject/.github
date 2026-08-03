@@ -1,0 +1,203 @@
+name: Dependabot Sweep
+
+# Reusable safety-net workflow. The event-driven Dependabot automation
+# (`dependabot-auto-merge.yml`, triggered by `workflow_run` / `pull_request_review`)
+# fires once per event with no retry, so a PR can end up in a state it never
+# handled — approved + CI-green but unmerged (a missed/late event), or reviewed
+# with no verdict label (a crashed review) — and then sit silently, neither
+# merged nor escalated (see MJ-2683 / macuject/web#2155, #2156, #2159).
+#
+# This workflow is a periodic backstop. On each run it scans open Dependabot PRs
+# and, for any that have gone stale in one of those stuck states:
+#   * fully eligible (APPROVED + MERGEABLE + CI success) -> re-invokes the
+#     existing `dependabot-auto-merge.yml` for that PR via its `pr_number` input.
+#     The merge decision is made ENTIRELY by that workflow's own gate and
+#     classifier — this sweep grants no new merge authority and duplicates no
+#     gate logic.
+#   * needs a human (a verdict label with no reviewer assigned, or no verdict
+#     label at all after CI has finished) -> routes to a human via the shared
+#     `escalate-dependabot-pr` action, which assigns a reviewer once (guarded by
+#     a sentinel label).
+# Anything else is a no-op. A `stale_minutes` window keeps the sweep from racing
+# the event-driven path on freshly-updated PRs.
+#
+# Escalation only runs when the caller passes `team_slug` (same opt-in as the
+# escalate jobs in `dependabot-auto-merge.yml`).
+
+on:
+  workflow_call:
+    inputs:
+      workflow_name:
+        description: >-
+          Name of the CI workflow whose latest run on the PR head SHA is checked
+          for `conclusion=success`. Forwarded to `dependabot-auto-merge.yml`.
+          Defaults to `CI`.
+        type: string
+        default: CI
+      team_slug:
+        description: >-
+          GitHub team (slug under `macuject`) whose members are eligible
+          reviewers when a stuck PR is escalated. When empty (the default),
+          escalation is skipped entirely and the sweep only re-drives merges.
+        type: string
+        default: ""
+      stale_minutes:
+        description: >-
+          Only act on PRs whose last update is older than this many minutes, so
+          the sweep never races the event-driven automation on an in-flight PR.
+        type: number
+        default: 30
+      autofix_grace_seconds:
+        description: Forwarded to `dependabot-auto-merge.yml` unchanged.
+        type: number
+        default: 0
+      autofix_paths:
+        description: Forwarded to `dependabot-auto-merge.yml` unchanged.
+        type: string
+        default: ""
+      exclude_reviewers:
+        description: >-
+          Comma-separated team members never assigned as a human reviewer.
+          Forwarded to both the merge path and the escalation action.
+        type: string
+        default: ""
+    secrets:
+      ORG_TEAM_MEMBERS:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    outputs:
+      merge: ${{ steps.scan.outputs.merge }}
+      escalate: ${{ steps.scan.outputs.escalate }}
+    steps:
+      - name: Scan open Dependabot PRs
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
+          WORKFLOW_NAME: ${{ inputs.workflow_name }}
+          STALE_MINUTES: ${{ inputs.stale_minutes }}
+          TEAM_SLUG: ${{ inputs.team_slug }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          NOW=$(date +%s)
+          STALE_SECS=$(( STALE_MINUTES * 60 ))
+
+          # `mapfile`-free scan: emit one PR object per line so the shell can
+          # iterate without word-splitting on JSON.
+          PRS=$(gh pr list --repo "$REPO" --state open --author 'app/dependabot' \
+            --limit 100 \
+            --json number,reviewDecision,mergeable,labels,updatedAt,headRefOid,reviewRequests \
+            | jq -c '.[]')
+
+          MERGE=()
+          ESCALATE=()
+
+          while IFS= read -r pr; do
+            [ -z "$pr" ] && continue
+            NUM=$(jq -r '.number' <<<"$pr")
+            REVIEW=$(jq -r '.reviewDecision // ""' <<<"$pr")
+            MERGEABLE=$(jq -r '.mergeable // ""' <<<"$pr")
+            SHA=$(jq -r '.headRefOid' <<<"$pr")
+            UPDATED=$(jq -r '.updatedAt' <<<"$pr")
+            REVIEWERS=$(jq -r '.reviewRequests | length' <<<"$pr")
+            LABELS=$(jq -r '[.labels[].name]' <<<"$pr")
+            has() { jq -e --arg l "$1" 'index($l)' <<<"$LABELS" >/dev/null; }
+
+            AGE=$(( NOW - $(date -d "$UPDATED" +%s) ))
+            if [ "$AGE" -lt "$STALE_SECS" ]; then
+              echo "PR #$NUM updated ${AGE}s ago (< ${STALE_SECS}s) — too fresh, leaving to the event path."
+              continue
+            fi
+
+            # Latest conclusion of the CI workflow on the current head SHA.
+            CONCL=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&event=pull_request" \
+              --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\")] | sort_by(.run_started_at) | last | .conclusion // \"none\"")
+
+            if [ "$REVIEW" = "APPROVED" ] && [ "$MERGEABLE" = "MERGEABLE" ] && [ "$CONCL" = "success" ]; then
+              # Eligible but unmerged — the event path missed it. Let
+              # dependabot-auto-merge.yml re-decide (it will no-op on a major).
+              echo "PR #$NUM: approved + mergeable + CI green but open — queueing for auto-merge re-drive."
+              MERGE+=("$NUM")
+            elif [ "$REVIEWERS" -eq 0 ] && [ "$CONCL" != "none" ] && { has "needs-human-review" || has "claude-review-unavailable"; }; then
+              # A verdict said a human is needed, but no reviewer was assigned.
+              echo "PR #$NUM: human-needed verdict but no reviewer — queueing for escalation."
+              ESCALATE+=("$NUM")
+            elif [ "$REVIEWERS" -eq 0 ] && [ "$CONCL" != "none" ] \
+              && ! has "claude-auto-merge-candidate" && ! has "needs-human-review" && ! has "claude-review-unavailable"; then
+              # CI finished but the review produced no verdict at all (e.g. a
+              # crashed review) and no reviewer is assigned — genuinely stuck.
+              echo "PR #$NUM: CI complete, no verdict label, no reviewer — queueing for escalation."
+              ESCALATE+=("$NUM")
+            else
+              echo "PR #$NUM: no action (review=$REVIEW mergeable=$MERGEABLE ci=$CONCL reviewers=$REVIEWERS)."
+            fi
+          done <<< "$PRS"
+
+          # `grep -v` exits 1 when it filters everything out (the common
+          # zero-candidate case); tolerate that so `set -e`/`pipefail` don't
+          # abort the step before the outputs are written.
+          to_json() { printf '%s\n' "${@}" | { grep -v '^$' || true; } | jq -R . | jq -cs .; }
+          MERGE_JSON=$(to_json "${MERGE[@]:-}")
+          ESCALATE_JSON=$(to_json "${ESCALATE[@]:-}")
+          echo "Merge candidates:    $MERGE_JSON"
+          echo "Escalate candidates: $ESCALATE_JSON"
+          echo "merge=$MERGE_JSON" >> "$GITHUB_OUTPUT"
+          echo "escalate=$ESCALATE_JSON" >> "$GITHUB_OUTPUT"
+
+  # Re-drive the EXISTING auto-merge workflow per eligible PR. All gate,
+  # classification, and merge logic lives there and runs unchanged; this sweep
+  # only supplies the PR number.
+  merge:
+    needs: triage
+    if: needs.triage.outputs.merge != '[]' && needs.triage.outputs.merge != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.triage.outputs.merge) }}
+    uses: ./.github/workflows/dependabot-auto-merge.yml
+    with:
+      workflow_name: ${{ inputs.workflow_name }}
+      team_slug: ${{ inputs.team_slug }}
+      autofix_grace_seconds: ${{ inputs.autofix_grace_seconds }}
+      autofix_paths: ${{ inputs.autofix_paths }}
+      exclude_reviewers: ${{ inputs.exclude_reviewers }}
+      pr_number: ${{ matrix.pr }}
+    secrets: inherit
+
+  # Route genuinely-stuck PRs to a human. Reuses the same shared action the
+  # event-driven escalation uses; the sentinel label makes it a once-only
+  # summons. Skipped unless the caller opted in with `team_slug`.
+  escalate:
+    needs: triage
+    if: >-
+      inputs.team_slug != '' &&
+      needs.triage.outputs.escalate != '[]' &&
+      needs.triage.outputs.escalate != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.triage.outputs.escalate) }}
+    steps:
+      - name: Escalate stuck Dependabot PR to a human
+        uses: macuject/.github/.github/actions/escalate-dependabot-pr@main
+        with:
+          pr_number: ${{ matrix.pr }}
+          repo: ${{ github.repository }}
+          team_slug: ${{ inputs.team_slug }}
+          org_token: ${{ secrets.ORG_TEAM_MEMBERS }}
+          dismiss_approval: "false"
+          sentinel_label: dependabot-swept-to-human
+          exclude_members: ${{ inputs.exclude_reviewers }}
+          comment_body: >-
+            ⚠️ Safety-net sweep: this Dependabot PR has been open and idle
+            without being auto-merged or routed to a reviewer — the event-driven
+            automation appears to have missed it. A human reviewer has been
+            assigned; please review the CI result and the changes before merging.
