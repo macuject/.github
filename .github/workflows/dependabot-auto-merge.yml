@@ -239,8 +239,8 @@ jobs:
           # number of numeric segments, zero-padding the shorter side, so
           # 4-segment versions such as Rails security patches (8.1.3 -> 8.1.3.1,
           # a patch) classify correctly rather than falling through to
-          # `unknown` (see macuject/web#2155). Only an upward bump is
-          # classified; a downgrade or an all-equal pair emits nothing.
+          # `unknown`. Only an upward bump is classified; a downgrade or an
+          # all-equal pair emits nothing.
           classify() {
             local o n; IFS=. read -ra o <<<"$1"; IFS=. read -ra n <<<"$2"
             local len=${#o[@]}; [ "${#n[@]}" -gt "$len" ] && len=${#n[@]}
