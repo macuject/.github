@@ -5,7 +5,7 @@ name: Dependabot Sweep
 # fires once per event with no retry, so a PR can end up in a state it never
 # handled — approved + CI-green but unmerged (a missed/late event), or reviewed
 # with no verdict label (a crashed review) — and then sit silently, neither
-# merged nor escalated (see MJ-2683 / macuject/web#2155, #2156, #2159).
+# merged nor escalated.
 #
 # This workflow is a periodic backstop. On each run it scans open Dependabot PRs
 # and, for any that have gone stale in one of those stuck states:
