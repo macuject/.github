@@ -78,6 +78,17 @@ on:
           PR is escalated (e.g. bot accounts that belong to the team). Optional.
         type: string
         default: ""
+      pr_number:
+        description: >-
+          Explicit PR number to evaluate, used by the scheduled safety-net
+          sweep (`dependabot-sweep.yml`) to re-run the auto-merge gate for a PR
+          the event-driven triggers missed. When set, the `auto-merge` job runs
+          against this PR regardless of the triggering event, applying the exact
+          same gate/classification/merge steps. The `escalate-*` jobs remain
+          gated on `workflow_run` and are unaffected. Optional: empty (the
+          default) preserves the original event-driven behaviour entirely.
+        type: string
+        default: ""
     secrets:
       ORG_TEAM_MEMBERS:
         required: true
@@ -91,6 +102,7 @@ jobs:
     # Only run on CI success (workflow_run for a PR) or review submission.
     # A failed CI run or a non-PR workflow_run is a no-op.
     if: >-
+      inputs.pr_number != '' ||
       (github.event_name == 'workflow_run' &&
          github.event.workflow_run.conclusion == 'success' &&
          github.event.workflow_run.event == 'pull_request') ||
@@ -103,7 +115,10 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+          if [ -n "${{ inputs.pr_number }}" ]; then
+            # Sweep path: evaluate the PR passed in explicitly.
+            NUM='${{ inputs.pr_number }}'
+          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
             NUM=$(jq -r '.workflow_run.pull_requests[0].number // empty' < "$GITHUB_EVENT_PATH")
           else
             NUM='${{ github.event.pull_request.number }}'
