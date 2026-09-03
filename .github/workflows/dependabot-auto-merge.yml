@@ -139,14 +139,13 @@ jobs:
         run: |
           set -euo pipefail
           DATA=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json author,reviewDecision,mergeable,state,headRefOid)
+            --json author,mergeable,state,headRefOid)
           AUTHOR=$(jq -r '.author.login' <<<"$DATA")
-          REVIEW=$(jq -r '.reviewDecision' <<<"$DATA")
           MERGEABLE=$(jq -r '.mergeable' <<<"$DATA")
           STATE=$(jq -r '.state' <<<"$DATA")
           SHA=$(jq -r '.headRefOid' <<<"$DATA")
 
-          echo "author=$AUTHOR review=$REVIEW mergeable=$MERGEABLE state=$STATE sha=$SHA"
+          echo "author=$AUTHOR mergeable=$MERGEABLE state=$STATE sha=$SHA"
 
           if [ "$AUTHOR" != "app/dependabot" ]; then
             echo "Not a Dependabot PR; skipping."
@@ -157,28 +156,107 @@ jobs:
             exit 0
           fi
 
-          # reviewDecision may lag behind the actual review submission by
-          # several seconds due to GitHub API eventual consistency. When the
-          # trigger is pull_request_review we know a review was just submitted,
-          # so retry a few times before giving up. For workflow_run triggers
-          # the review happened earlier, so a single check suffices.
-          if [ "$REVIEW" != "APPROVED" ]; then
-            if [ "${{ github.event_name }}" = "pull_request_review" ]; then
-              echo "reviewDecision not yet APPROVED; retrying (eventual consistency)..."
-              for i in 1 2 3; do
-                sleep 5
-                REVIEW=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-                  --json reviewDecision --jq '.reviewDecision')
-                echo "  attempt $i: reviewDecision=$REVIEW"
-                if [ "$REVIEW" = "APPROVED" ]; then
-                  break
-                fi
-              done
-            fi
-            if [ "$REVIEW" != "APPROVED" ]; then
-              echo "PR not approved (reviewDecision=$REVIEW); skipping."
+          # Standing review verdicts, read from the reviews API rather than
+          # `reviewDecision`. That field is derived from the branch ruleset's
+          # approval requirement, so under `required_approving_review_count: 0`
+          # GitHub returns null for every PR whether approved or not, and a gate
+          # reading it can never pass.
+          #
+          # Emits `order<TAB>login<TAB>state<TAB>commit` for each reviewer's
+          # latest verdict, oldest first. `DISMISSED` is excluded by the state
+          # filter, which is what lets the escalation paths cancel a merge by
+          # dismissing the automated approval. `--paginate` runs the jq filter
+          # once per page, so the per-reviewer reduction is done in awk over the
+          # whole stream rather than with a per-page `last`.
+          #
+          # A review whose author no longer exists has `user: null`. It gets the
+          # `(unknown)` sentinel rather than an empty login: tab is an IFS
+          # whitespace character, so an empty field would be collapsed by `read`
+          # below and shift every later field. The sentinel cannot be a real
+          # username, so such a review can never approve, but its
+          # CHANGES_REQUESTED still blocks.
+          verdicts() {
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --paginate \
+              --jq '.[]
+                    | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
+                    | [(.user.login // "(unknown)"), .state, .commit_id] | @tsv' \
+              | awk -F'\t' '{ seq[$1] = NR; verdict[$1] = $2; commit[$1] = $3 }
+                            END { for (u in seq)
+                                    print seq[u] "\t" u "\t" verdict[u] "\t" commit[u] }' \
+              | sort -n
+          }
+
+          # `author_association` is not a permission: `MEMBER` is any org member
+          # and `COLLABORATOR` any invited collaborator, either of which may be
+          # read-only. `reviewDecision` counted only reviews from users with push
+          # access, so resolve the reviewer's actual permission rather than
+          # inferring it from their association.
+          can_approve() {
+            local perm
+            perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" \
+              --jq '.permission' 2>/dev/null) || perm=none
+            case "$perm" in
+              admin | maintain | write) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          # Sets REVIEW (a summary for the log) and APPROVED_SHA (the commit the
+          # newest eligible approval was submitted against, handed to the
+          # post-approval drift check so both steps judge the same approval).
+          # A CHANGES_REQUESTED blocks whatever the reviewer's permission —
+          # failing safe on an objection — while an approval counts only from
+          # someone who can actually approve.
+          resolve_reviews() {
+            local seq login verdict commit verdicts=""
+            APPROVED_SHA=""
+            while IFS=$'\t' read -r seq login verdict commit; do
+              [ -n "${verdict:-}" ] || continue
+              if [ "$verdict" = "CHANGES_REQUESTED" ]; then
+                verdicts="$verdicts CHANGES_REQUESTED"
+              elif [ -n "$login" ] && can_approve "$login"; then
+                verdicts="$verdicts APPROVED"
+                APPROVED_SHA="$commit"
+              fi
+            done <<<"$VERDICTS"
+            REVIEW=$(tr ' ' '\n' <<<"$verdicts" | grep -v '^$' | sort -u | paste -sd, -) \
+              || REVIEW=""
+          }
+
+          VERDICTS=$(verdicts)
+          resolve_reviews
+          echo "review=${REVIEW:-none} approved_sha=${APPROVED_SHA:-none}"
+
+          # The reviews API may lag the review submission by several seconds due
+          # to GitHub API eventual consistency. When the trigger is
+          # pull_request_review we know a review was just submitted, so retry a
+          # few times before giving up. For workflow_run triggers the review
+          # happened earlier, so a single check suffices. Any standing verdict
+          # ends the wait: an approval is what we came for, and a
+          # CHANGES_REQUESTED is terminal, so there is nothing left to wait for.
+          if [ -z "$REVIEW" ] && [ "${{ github.event_name }}" = "pull_request_review" ]; then
+            echo "No standing verdict yet; retrying (eventual consistency)..."
+            for i in 1 2 3; do
+              sleep 5
+              VERDICTS=$(verdicts)
+              resolve_reviews
+              echo "  attempt $i: review=${REVIEW:-none}"
+              if [ -n "$REVIEW" ]; then
+                break
+              fi
+            done
+          fi
+
+          case "$REVIEW" in
+            *CHANGES_REQUESTED*)
+              echo "Changes requested by a reviewer (review=$REVIEW); skipping."
               exit 0
-            fi
+              ;;
+          esac
+          if [ -z "$APPROVED_SHA" ]; then
+            echo "No standing approval from a reviewer with push access" \
+              "(review=${REVIEW:-none}); skipping."
+            exit 0
           fi
 
           # mergeable is computed asynchronously by GitHub and briefly returns
@@ -221,6 +299,7 @@ jobs:
 
           echo "ok=true" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "approved_sha=$APPROVED_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Determine update type from Dependabot commit metadata
         if: steps.gate.outputs.ok == 'true'
@@ -312,19 +391,17 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_TEAM_MEMBERS }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           HEAD_SHA: ${{ steps.gate.outputs.sha }}
+          APPROVED_SHA: ${{ steps.gate.outputs.approved_sha }}
           AUTOFIX_PATHS: ${{ inputs.autofix_paths }}
         run: |
           set -euo pipefail
 
-          # The commit the standing approval was submitted against. With no
-          # APPROVED review the gate would not have passed, so this is set.
-          # `--paginate` runs the jq filter per page, so a cross-page reduction
-          # like `last` would yield one value per page. Emit each APPROVED
-          # commit_id (oldest to newest) and take the final line — the most
-          # recent approval.
-          APPROVED_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --paginate \
-            --jq '.[] | select(.state == "APPROVED") | .commit_id' | tail -n1)
-          if [ -z "$APPROVED_SHA" ]; then
+          # The commit the standing approval was submitted against, resolved by
+          # the gate step so both steps judge the same approval — in particular
+          # the same push-access check on the approver. Deriving it here
+          # independently would let an approval the gate rejected clear this
+          # check instead.
+          if [ -z "${APPROVED_SHA:-}" ]; then
             echo "Could not resolve the approved commit; blocking merge as a precaution."
             echo "block=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
