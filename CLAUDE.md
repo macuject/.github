@@ -35,6 +35,7 @@ Use concise, imperative-tense messages describing the change. Examples from hist
 - `.github/workflows/create-jira-issue.yml` — Dependabot PR handling and Jira issue creation
 - `.github/workflows/rename-pr.yml` — PR title validation and renaming from branch name
 - `.github/workflows/update-jira-issue.yml` — fixVersion management and Jira commenting on merge
+- `.github/workflows/reviewer-gate.yml` — removes a human review request until the Claude review has run and been answered
 - `.github/workflows/*.mjs` — supporting Node.js scripts for the workflows
 
 ## Important Context

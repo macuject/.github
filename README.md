@@ -49,6 +49,30 @@ Runs when a PR is merged:
 3. Updates the Jira issue's `fixVersion`.
 4. Posts the PR description as a formatted comment on the Jira issue (with image support).
 
+### `reviewer-gate.yml`
+
+Runs when a human is requested as a reviewer on a non-Dependabot PR:
+
+1. Checks a reviewed label (`claude-reviewed` or `claude-reviewed-again`) is present.
+2. Checks a human comment, review, or commit is newer than the automated review.
+3. Otherwise removes the review request and asks the author to trigger and address the Claude review first.
+
+No repository calls it yet. A repository opts in with:
+
+```yaml
+on:
+  pull_request:
+    types: [review_requested]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gate:
+    uses: macuject/.github/.github/workflows/reviewer-gate.yml@main
+```
+
 ## PR Requirements
 
 ### Jira ticket association
