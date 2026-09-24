@@ -54,8 +54,8 @@ Runs when a PR is merged:
 Runs when a human is requested as a reviewer on a non-Dependabot PR:
 
 1. Checks a reviewed label (`claude-reviewed` or `claude-reviewed-again`) is present.
-2. Checks a human comment, review, or commit is newer than the automated review.
-3. Otherwise removes the review request and asks the author to trigger and address the Claude review first.
+2. Checks a human comment, review, or non-merge commit is newer than the automated review.
+3. Otherwise removes the review request and asks the author, in one comment per review, to trigger and address the Claude review first.
 
 No repository calls it yet. A repository opts in with:
 

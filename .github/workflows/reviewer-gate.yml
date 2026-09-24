@@ -1,19 +1,8 @@
 name: Reviewer Gate
 
-# Reusable workflow. When a human is requested as a reviewer on a PR, checks
-# that the automated Claude review has run (one of `inputs.reviewed_labels`
-# is present) and has been answered since it finished (a human comment,
-# review, or commit newer than the review). Otherwise it removes the review
-# request and asks the author to trigger and address the review first.
-#
-# The review's completion time is the newest comment by `inputs.review_bot`:
-# the review action posts a tracking comment when it starts and edits it when
-# it finishes, so `updated_at` marks completion. The `labeled` event for a
-# reviewed label is the fallback when no such comment exists.
-#
-# Inert until a repository opts in by calling it on
-# `pull_request: [review_requested]`. Dependabot PRs are skipped: their
-# review and approval path is handled by the Dependabot automation.
+# Removes a human review request until the automated Claude review has run
+# and a human has answered it since; callers use `pull_request:
+# [review_requested]`, and Dependabot PRs are skipped.
 
 on:
   workflow_call:
@@ -43,6 +32,9 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]' &&
       github.event.requested_reviewer.type != 'Bot'
     runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.check.outputs.verdict }}
+      reviewed_at: ${{ steps.check.outputs.reviewed_at }}
     steps:
       - name: Check the review ran and was answered
         id: check
@@ -73,34 +65,35 @@ jobs:
             exit 0
           fi
 
-          # Completion time of the newest review: the bot edits its tracking
-          # comment when the review finishes, so `updated_at` is the finish time.
-          REVIEWED_AT=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-            --jq ".[] | select(.user.login == \"$REVIEW_BOT\") | .updated_at" | sort | tail -1)
-          if [ -z "$REVIEWED_AT" ]; then
-            REVIEWED_AT=$(gh api "repos/$REPO/issues/$PR_NUMBER/timeline" --paginate \
-              --jq ".[] | select(.event == \"labeled\" and (.label.name | IN($WANTED[]))) | .created_at" \
-              | sort | tail -1)
-          fi
+          # Re-adding a label already present records no new `labeled` event,
+          # so the bot's own activity is needed to date repeat reviews.
+          REVIEWED_AT=$( {
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+              --jq ".[] | select(.user.login == \"$REVIEW_BOT\") | .updated_at"
+            gh api "repos/$REPO/pulls/$PR_NUMBER/comments" --paginate \
+              --jq ".[] | select(.user.login == \"$REVIEW_BOT\") | .created_at"
+            gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
+              --jq ".[] | select(.user.login == \"$REVIEW_BOT\" and .submitted_at != null) | .submitted_at"
+            gh api "repos/$REPO/issues/$PR_NUMBER/timeline" --paginate \
+              --jq ".[] | select(.event == \"labeled\" and (.label.name | IN(${WANTED}[]))) | .created_at"
+          } | sort | tail -1)
           echo "reviewed_at=$REVIEWED_AT" >> "$GITHUB_OUTPUT"
           if [ -z "$REVIEWED_AT" ]; then
-            echo "Reviewed label present but no review comment or label event found; treating as unanswered."
+            echo "Reviewed label present but no review activity or label event found; treating as unanswered."
             echo "verdict=unanswered" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Newest human activity: issue comments (excluding the review trigger
-          # itself), review comments, reviews, and commits. Only comments from
-          # `User` accounts count, so bot chatter never passes the gate.
+          # Review triggers and merge commits don't answer a review.
           ANSWERED_AT=$( {
             gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-              --jq '.[] | select(.user.type == "User" and (.body | test("@claude review") | not)) | .created_at'
+              --jq '.[] | select(.user.type == "User" and (.body | test("@claude review"; "i") | not)) | .created_at'
             gh api "repos/$REPO/pulls/$PR_NUMBER/comments" --paginate \
               --jq '.[] | select(.user.type == "User") | .created_at'
             gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
               --jq '.[] | select(.user.type == "User" and .submitted_at != null) | .submitted_at'
             gh api "repos/$REPO/pulls/$PR_NUMBER/commits" --paginate \
-              --jq '.[].commit.committer.date'
+              --jq '.[] | select(.parents | length == 1) | .commit.committer.date'
           } | sort | tail -1)
 
           echo "reviewed_at=$REVIEWED_AT answered_at=${ANSWERED_AT:-none}"
@@ -111,7 +104,7 @@ jobs:
             echo "verdict=unanswered" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Remove the review request and ask for the review first
+      - name: Remove the review request
         if: >-
           steps.check.outputs.verdict == 'unreviewed' ||
           steps.check.outputs.verdict == 'unanswered'
@@ -119,11 +112,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
           REVIEWER: ${{ github.event.requested_reviewer.login }}
           TEAM: ${{ github.event.requested_team.slug }}
-          VERDICT: ${{ steps.check.outputs.verdict }}
-          REVIEWED_AT: ${{ steps.check.outputs.reviewed_at }}
         run: |
           set -euo pipefail
 
@@ -131,13 +121,33 @@ jobs:
             echo "Removing review request for $REVIEWER."
             gh api -X DELETE "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
               --input - <<<"{\"reviewers\":[\"$REVIEWER\"]}" >/dev/null
-            WHO="\`$REVIEWER\`"
           else
             echo "Removing review request for team $TEAM."
             gh api -X DELETE "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
               --input - <<<"{\"team_reviewers\":[\"$TEAM\"]}" >/dev/null
-            WHO="team \`$TEAM\`"
           fi
+
+  ask:
+    needs: gate
+    if: >-
+      needs.gate.outputs.verdict == 'unreviewed' ||
+      needs.gate.outputs.verdict == 'unanswered'
+    # Serialised per PR so reviewers requested together get one comment.
+    concurrency:
+      group: reviewer-gate-ask-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask for the review first
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          VERDICT: ${{ needs.gate.outputs.verdict }}
+          REVIEWED_AT: ${{ needs.gate.outputs.reviewed_at }}
+        run: |
+          set -euo pipefail
 
           # One request per review: a marker comment newer than the latest
           # review means the author has already been asked.
@@ -153,10 +163,10 @@ jobs:
           # The review workflow ignores comments from bot accounts, so quoting
           # the trigger phrase here does not start a review.
           if [ "$VERDICT" = "unreviewed" ]; then
-            REASON="the automated Claude review has not run on this PR yet. Please comment \`@claude review\`, address its findings with a reply or a commit, and then request the review again. Thanks!"
+            REASON="the automated Claude review has not run on this PR yet. Please comment \`@claude review\`, address its findings with a reply or a commit, and then request reviews again. Thanks!"
           else
-            REASON="nothing has been posted since the automated Claude review finished. Please address its findings with a reply or a commit, and then request the review again. Thanks!"
+            REASON="nothing has been posted since the automated Claude review finished. Please address its findings with a reply or a commit, and then request reviews again. Thanks!"
           fi
-          BODY=$(printf '%s\n@%s the review request for %s has been removed because %s' \
-            "$MARKER" "$AUTHOR" "$WHO" "$REASON")
+          BODY=$(printf '%s\n@%s review requests on this PR have been removed because %s' \
+            "$MARKER" "$AUTHOR" "$REASON")
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$BODY"
