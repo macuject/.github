@@ -9,7 +9,8 @@ permissions:
   pull-requests: write
 
 jobs:
-  gate:
+  # A human review request stands only once the Claude review has run and has a reply.
+  hold-review-request:
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
@@ -31,7 +32,7 @@ jobs:
               || format('team_reviewers[]={0}', github.event.requested_team.slug) }}
         run: gh api -X DELETE "$URL" -f "$FIELD" --silent
 
-      - name: Ask the author for the review or a response
+      - name: Ask the author to run or reply to the Claude review
         env:
           AUTHOR: ${{ github.event.pull_request.user.login }}
           NEEDS_RESPONSE: ${{ contains(github.event.pull_request.labels.*.name, 'needs-response') }}
@@ -45,7 +46,8 @@ jobs:
           gh pr comment "$PR_URL" --body \
             "@$AUTHOR review requests were removed. Please $ASK, then request reviews again."
 
-  clear:
+  # Any human comment, review or review comment is a reply, except an `@claude review` trigger.
+  clear-needs-response:
     if: >-
       ((github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
        github.event_name == 'pull_request_review' ||

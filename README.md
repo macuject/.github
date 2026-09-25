@@ -51,24 +51,28 @@ Runs when a PR is merged:
 
 ### `reviewer-gate.yml`
 
-Holds human review requests until the automated Claude review has run and a human has responded to it. It reads PR labels only:
+Holds human review requests until the automated Claude review has run and a human has replied to it.
 
-- **`claude-reviewed` / `claude-reviewed-again`** show the review has run.
-- **`needs-response`** shows the latest review has had no human response.
+#### How it works
 
-When a human is requested as a reviewer on a non-Dependabot PR:
+1. The Claude review adds the `needs-response` label after every run.
+2. Any human comment, review or review comment removes `needs-response`. A push does not.
+3. When a human reviewer is requested:
+   - With no `claude-reviewed` or `claude-reviewed-again` label, the request is removed and the author is asked to run `@claude review`.
+   - With `needs-response`, the request is removed and the author is asked to reply.
+   - Otherwise the request stands.
+4. Removing `needs-response` by hand skips the reply check.
 
-1. With no reviewed label, it removes the request and asks the author to comment `@claude review`.
-2. With `needs-response`, it removes the request and asks the author to respond to the review.
-3. Otherwise the request stands.
+#### Details
 
-Each removed request posts a new comment.
+- Dependabot PRs and bot reviewers are skipped.
+- A comment containing `@claude review` doesn't count as a reply.
+- A clean review still needs a reply, and any human can give it.
+- Each removed request posts a new comment asking the author.
+- Events that don't match skip at the job level, so they start no runner.
+- A comment posted in the seconds between the review finishing and `needs-response` being added is missed. Comment again or remove the label.
 
-A human's PR comment, review, or review comment removes `needs-response`, unless it contains `@claude review`. Any human can clear it, and a clean review still needs a response. A push alone never clears it. Removing the label by hand overrides the gate.
-
-Events that don't match skip at the job level, so they start no runner.
-
-A comment posted in the seconds between the review finishing and `needs-response` being added is missed. Comment again or remove the label.
+#### Calling it
 
 A repository opts in with the caller below:
 
@@ -88,7 +92,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  gate:
+  reviewer-gate:
     uses: macuject/.github/.github/workflows/reviewer-gate.yml@main
 ```
 
