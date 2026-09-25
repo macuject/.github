@@ -62,7 +62,7 @@ When a human is requested as a reviewer on a non-Dependabot PR:
 2. With `needs-response`, it removes the request and asks the author to respond to the review.
 3. Otherwise the request stands.
 
-The ask is a single comment on the PR, edited in place on each later ask.
+Each removed request posts a new comment.
 
 A human's PR comment, review, or review comment removes `needs-response`, unless it contains `@claude review`. Any human can clear it, and a clean review still needs a response. A push alone never clears it. Removing the label by hand overrides the gate.
 
@@ -70,9 +70,10 @@ Events that don't match skip at the job level, so they start no runner.
 
 A comment posted in the seconds between the review finishing and `needs-response` being added is missed. Comment again or remove the label.
 
-A repository opts in with:
+A repository opts in with the caller below:
 
 ```yaml
+# Use exactly these trigger types; reviewer-gate.yml doesn't check event actions.
 on:
   pull_request:
     types: [review_requested]

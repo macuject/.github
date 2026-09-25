@@ -12,17 +12,18 @@ jobs:
   gate:
     if: >-
       github.event_name == 'pull_request' &&
-      github.event.action == 'review_requested' &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
       github.event.requested_reviewer.type != 'Bot' &&
       (contains(github.event.pull_request.labels.*.name, 'needs-response') ||
        !(contains(github.event.pull_request.labels.*.name, 'claude-reviewed') ||
          contains(github.event.pull_request.labels.*.name, 'claude-reviewed-again')))
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
     steps:
       - name: Remove the review request
         env:
-          GH_TOKEN: ${{ github.token }}
           URL: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/requested_reviewers
           FIELD: >-
             ${{ github.event.requested_reviewer
@@ -30,44 +31,25 @@ jobs:
               || format('team_reviewers[]={0}', github.event.requested_team.slug) }}
         run: gh api -X DELETE "$URL" -f "$FIELD" --silent
 
-  ask:
-    needs: gate
-    # Serialised per PR so reviewers requested together share one comment.
-    concurrency:
-      group: reviewer-gate-ask-${{ github.repository }}-${{ github.event.pull_request.number }}
-    runs-on: ubuntu-latest
-    steps:
       - name: Ask the author for the review or a response
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
           NEEDS_RESPONSE: ${{ contains(github.event.pull_request.labels.*.name, 'needs-response') }}
         run: |
-          MARKER='<!-- reviewer-gate -->'
           # The review workflow ignores bot comments, so quoting its trigger is safe.
           if [ "$NEEDS_RESPONSE" = true ]; then
             ASK='reply to the latest Claude review in a comment or review (a push alone does not count)'
           else
             ASK="comment \`@claude review\` and reply to its findings in a comment or review"
           fi
-          BODY=$(printf '%s\n@%s review requests were removed. Please %s, then request reviews again.' \
-            "$MARKER" "$AUTHOR" "$ASK")
-          IDS=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate --jq \
-            ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .id")
-          if [ -n "$IDS" ]; then
-            gh api -X PATCH "repos/$REPO/issues/comments/${IDS%%$'\n'*}" -f body="$BODY" --silent
-          else
-            gh api "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$BODY" --silent
-          fi
+          gh pr comment "$PR_URL" --body \
+            "@$AUTHOR review requests were removed. Please $ASK, then request reviews again."
 
   clear:
     if: >-
-      ((github.event_name == 'issue_comment' && github.event.action == 'created' &&
-        github.event.issue.pull_request) ||
-       (github.event_name == 'pull_request_review' && github.event.action == 'submitted') ||
-       (github.event_name == 'pull_request_review_comment' && github.event.action == 'created')) &&
+      ((github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
+       github.event_name == 'pull_request_review' ||
+       github.event_name == 'pull_request_review_comment') &&
       (github.event.comment.user.type || github.event.review.user.type) == 'User' &&
       !contains(github.event.comment.body || github.event.review.body, '@claude review') &&
       (contains(github.event.issue.labels.*.name, 'needs-response') ||
@@ -77,9 +59,5 @@ jobs:
       - name: Remove needs-response
         env:
           GH_TOKEN: ${{ github.token }}
-          URL: repos/${{ github.repository }}/issues/${{ github.event.issue.number || github.event.pull_request.number }}/labels/needs-response
-        run: |
-          # One review fires several events, so a parallel run may have removed it.
-          if ! OUT=$(gh api -X DELETE "$URL" --silent 2>&1); then
-            grep -q 'HTTP 404' <<<"$OUT" || { echo "$OUT" >&2; exit 1; }
-          fi
+          PR_URL: ${{ github.event.issue.html_url || github.event.pull_request.html_url }}
+        run: gh pr edit "$PR_URL" --remove-label needs-response
