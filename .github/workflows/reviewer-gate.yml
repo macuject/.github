@@ -1,27 +1,11 @@
 name: Reviewer Gate
 
-# Removes a human review request until the automated Claude review has run
-# and a human has answered it since; callers use `pull_request:
-# [review_requested]`, and Dependabot PRs are skipped.
+# Callers' code-review.yml must add `needs-response` after every review run.
 
 on:
   workflow_call:
-    inputs:
-      reviewed_labels:
-        description: >-
-          Comma-separated labels, any one of which shows the automated review
-          has run on the PR.
-        type: string
-        default: claude-reviewed,claude-reviewed-again
-      review_bot:
-        description: >-
-          Login of the account that posts the automated review, used to find
-          when the review finished.
-        type: string
-        default: claude[bot]
 
 permissions:
-  contents: read
   pull-requests: write
 
 jobs:
@@ -30,143 +14,72 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.action == 'review_requested' &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
-      github.event.requested_reviewer.type != 'Bot'
+      github.event.requested_reviewer.type != 'Bot' &&
+      (contains(github.event.pull_request.labels.*.name, 'needs-response') ||
+       !(contains(github.event.pull_request.labels.*.name, 'claude-reviewed') ||
+         contains(github.event.pull_request.labels.*.name, 'claude-reviewed-again')))
     runs-on: ubuntu-latest
-    outputs:
-      verdict: ${{ steps.check.outputs.verdict }}
-      reviewed_at: ${{ steps.check.outputs.reviewed_at }}
     steps:
-      - name: Check the review ran and was answered
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REVIEWED_LABELS: ${{ inputs.reviewed_labels }}
-          REVIEW_BOT: ${{ inputs.review_bot }}
-        run: |
-          set -euo pipefail
-
-          DATA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json state,labels)
-          STATE=$(jq -r '.state' <<<"$DATA")
-          if [ "$STATE" != "OPEN" ]; then
-            echo "PR #$PR_NUMBER not open (state=$STATE); skipping."
-            echo "verdict=skip" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          WANTED=$(tr ',' '\n' <<<"$REVIEWED_LABELS" | sed 's/^ *//; s/ *$//' \
-            | jq -R . | jq -cs 'map(select(. != ""))')
-          if ! jq -e --argjson wanted "$WANTED" \
-              '[.labels[].name] | any(. as $l | $wanted | index($l))' <<<"$DATA" >/dev/null; then
-            echo "None of $WANTED present; the review has not run."
-            echo "verdict=unreviewed" >> "$GITHUB_OUTPUT"
-            echo "reviewed_at=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Re-adding a label already present records no new `labeled` event,
-          # so the bot's own activity is needed to date repeat reviews.
-          REVIEWED_AT=$( {
-            gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-              --jq ".[] | select(.user.login == \"$REVIEW_BOT\") | .updated_at"
-            gh api "repos/$REPO/pulls/$PR_NUMBER/comments" --paginate \
-              --jq ".[] | select(.user.login == \"$REVIEW_BOT\") | .created_at"
-            gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
-              --jq ".[] | select(.user.login == \"$REVIEW_BOT\" and .submitted_at != null) | .submitted_at"
-            gh api "repos/$REPO/issues/$PR_NUMBER/timeline" --paginate \
-              --jq ".[] | select(.event == \"labeled\" and (.label.name | IN(${WANTED}[]))) | .created_at"
-          } | sort | tail -1)
-          echo "reviewed_at=$REVIEWED_AT" >> "$GITHUB_OUTPUT"
-          if [ -z "$REVIEWED_AT" ]; then
-            echo "Reviewed label present but no review activity or label event found; treating as unanswered."
-            echo "verdict=unanswered" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Review triggers and merge commits don't answer a review.
-          ANSWERED_AT=$( {
-            gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-              --jq '.[] | select(.user.type == "User" and (.body | test("@claude review"; "i") | not)) | .created_at'
-            gh api "repos/$REPO/pulls/$PR_NUMBER/comments" --paginate \
-              --jq '.[] | select(.user.type == "User") | .created_at'
-            gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
-              --jq '.[] | select(.user.type == "User" and .submitted_at != null) | .submitted_at'
-            gh api "repos/$REPO/pulls/$PR_NUMBER/commits" --paginate \
-              --jq '.[] | select(.parents | length == 1) | .commit.committer.date'
-          } | sort | tail -1)
-
-          echo "reviewed_at=$REVIEWED_AT answered_at=${ANSWERED_AT:-none}"
-          if [ -n "$ANSWERED_AT" ] \
-              && [ "$(date -d "$ANSWERED_AT" +%s)" -gt "$(date -d "$REVIEWED_AT" +%s)" ]; then
-            echo "verdict=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "verdict=unanswered" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Remove the review request
-        if: >-
-          steps.check.outputs.verdict == 'unreviewed' ||
-          steps.check.outputs.verdict == 'unanswered'
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REVIEWER: ${{ github.event.requested_reviewer.login }}
-          TEAM: ${{ github.event.requested_team.slug }}
-        run: |
-          set -euo pipefail
-
-          if [ -n "$REVIEWER" ]; then
-            echo "Removing review request for $REVIEWER."
-            gh api -X DELETE "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
-              --input - <<<"{\"reviewers\":[\"$REVIEWER\"]}" >/dev/null
-          else
-            echo "Removing review request for team $TEAM."
-            gh api -X DELETE "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
-              --input - <<<"{\"team_reviewers\":[\"$TEAM\"]}" >/dev/null
-          fi
+          URL: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/requested_reviewers
+          FIELD: >-
+            ${{ github.event.requested_reviewer
+              && format('reviewers[]={0}', github.event.requested_reviewer.login)
+              || format('team_reviewers[]={0}', github.event.requested_team.slug) }}
+        run: gh api -X DELETE "$URL" -f "$FIELD" --silent
 
   ask:
     needs: gate
-    if: >-
-      needs.gate.outputs.verdict == 'unreviewed' ||
-      needs.gate.outputs.verdict == 'unanswered'
-    # Serialised per PR so reviewers requested together get one comment.
+    # Serialised per PR so reviewers requested together share one comment.
     concurrency:
       group: reviewer-gate-ask-${{ github.repository }}-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
-      - name: Ask for the review first
+      - name: Ask the author for the review or a response
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
-          VERDICT: ${{ needs.gate.outputs.verdict }}
-          REVIEWED_AT: ${{ needs.gate.outputs.reviewed_at }}
+          NEEDS_RESPONSE: ${{ contains(github.event.pull_request.labels.*.name, 'needs-response') }}
         run: |
-          set -euo pipefail
-
-          # One request per review: a marker comment newer than the latest
-          # review means the author has already been asked.
           MARKER='<!-- reviewer-gate -->'
-          LAST_ASK=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-            --jq ".[] | select(.body | startswith(\"$MARKER\")) | .created_at" | sort | tail -1)
-          if [ -n "$LAST_ASK" ] && { [ -z "$REVIEWED_AT" ] \
-              || [ "$(date -d "$LAST_ASK" +%s)" -gt "$(date -d "$REVIEWED_AT" +%s)" ]; }; then
-            echo "Already asked at $LAST_ASK; not commenting again."
-            exit 0
+          # The review workflow ignores bot comments, so quoting its trigger is safe.
+          if [ "$NEEDS_RESPONSE" = true ]; then
+            ASK='reply to the latest Claude review in a comment or review (a push alone does not count)'
+          else
+            ASK="comment \`@claude review\` and reply to its findings in a comment or review"
+          fi
+          BODY=$(printf '%s\n@%s review requests were removed. Please %s, then request reviews again.' \
+            "$MARKER" "$AUTHOR" "$ASK")
+          IDS=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate --jq \
+            ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .id")
+          if [ -n "$IDS" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/${IDS%%$'\n'*}" -f body="$BODY" --silent
+          else
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$BODY" --silent
           fi
 
-          # The review workflow ignores comments from bot accounts, so quoting
-          # the trigger phrase here does not start a review.
-          if [ "$VERDICT" = "unreviewed" ]; then
-            REASON="the automated Claude review has not run on this PR yet. Please comment \`@claude review\`, address its findings with a reply or a commit, and then request reviews again. Thanks!"
-          else
-            REASON="nothing has been posted since the automated Claude review finished. Please address its findings with a reply or a commit, and then request reviews again. Thanks!"
+  clear:
+    if: >-
+      ((github.event_name == 'issue_comment' && github.event.action == 'created' &&
+        github.event.issue.pull_request) ||
+       (github.event_name == 'pull_request_review' && github.event.action == 'submitted') ||
+       (github.event_name == 'pull_request_review_comment' && github.event.action == 'created')) &&
+      (github.event.comment.user.type || github.event.review.user.type) == 'User' &&
+      !contains(github.event.comment.body || github.event.review.body, '@claude review') &&
+      (contains(github.event.issue.labels.*.name, 'needs-response') ||
+       contains(github.event.pull_request.labels.*.name, 'needs-response'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove needs-response
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: repos/${{ github.repository }}/issues/${{ github.event.issue.number || github.event.pull_request.number }}/labels/needs-response
+        run: |
+          # One review fires several events, so a parallel run may have removed it.
+          if ! OUT=$(gh api -X DELETE "$URL" --silent 2>&1); then
+            grep -q 'HTTP 404' <<<"$OUT" || { echo "$OUT" >&2; exit 1; }
           fi
-          BODY=$(printf '%s\n@%s review requests on this PR have been removed because %s' \
-            "$MARKER" "$AUTHOR" "$REASON")
-          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$BODY"

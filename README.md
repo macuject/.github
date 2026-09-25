@@ -51,27 +51,47 @@ Runs when a PR is merged:
 
 ### `reviewer-gate.yml`
 
-Runs when a human is requested as a reviewer on a non-Dependabot PR:
+Holds human review requests until the automated Claude review has run and a human has responded to it. It reads PR labels only:
 
-1. Checks a reviewed label (`claude-reviewed` or `claude-reviewed-again`) is present.
-2. Checks a human comment, review, or non-merge commit is newer than the automated review.
-3. Otherwise removes the review request and asks the author, in one comment per review, to trigger and address the Claude review first.
+- **`claude-reviewed` / `claude-reviewed-again`** show the review has run.
+- **`needs-response`** shows the latest review has had no human response.
 
-No repository calls it yet. A repository opts in with:
+When a human is requested as a reviewer on a non-Dependabot PR:
+
+1. With no reviewed label, it removes the request and asks the author to comment `@claude review`.
+2. With `needs-response`, it removes the request and asks the author to respond to the review.
+3. Otherwise the request stands.
+
+The ask is a single comment on the PR, edited in place on each later ask.
+
+A human's PR comment, review, or review comment removes `needs-response`, unless it contains `@claude review`. Any human can clear it, and a clean review still needs a response. A push alone never clears it. Removing the label by hand overrides the gate.
+
+Events that don't match skip at the job level, so they start no runner.
+
+A comment posted in the seconds between the review finishing and `needs-response` being added is missed. Comment again or remove the label.
+
+A repository opts in with:
 
 ```yaml
 on:
   pull_request:
     types: [review_requested]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
 
 permissions:
-  contents: read
   pull-requests: write
 
 jobs:
   gate:
     uses: macuject/.github/.github/workflows/reviewer-gate.yml@main
 ```
+
+Its `code-review.yml` must also add the `needs-response` label to the PR after every review run.
 
 ## PR Requirements
 
