@@ -1,0 +1,65 @@
+name: Reviewer Gate
+
+# Callers' code-review.yml must add `needs-response` after every review run.
+
+on:
+  workflow_call:
+
+permissions:
+  pull-requests: write
+
+jobs:
+  # A human review request stands only once the Claude review has run and has a reply.
+  hold-review-request:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.event.requested_reviewer.type != 'Bot' &&
+      (contains(github.event.pull_request.labels.*.name, 'needs-response') ||
+       !(contains(github.event.pull_request.labels.*.name, 'claude-reviewed') ||
+         contains(github.event.pull_request.labels.*.name, 'claude-reviewed-again')))
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+    steps:
+      - name: Remove the review request
+        env:
+          URL: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/requested_reviewers
+          FIELD: >-
+            ${{ github.event.requested_reviewer
+              && format('reviewers[]={0}', github.event.requested_reviewer.login)
+              || format('team_reviewers[]={0}', github.event.requested_team.slug) }}
+        run: gh api -X DELETE "$URL" -f "$FIELD" --silent
+
+      - name: Ask the author to run or reply to the Claude review
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          NEEDS_RESPONSE: ${{ contains(github.event.pull_request.labels.*.name, 'needs-response') }}
+        run: |
+          # The review workflow ignores bot comments, so quoting its trigger is safe.
+          if [ "$NEEDS_RESPONSE" = true ]; then
+            ASK='reply to the latest Claude review in a comment or review (a push alone does not count)'
+          else
+            ASK="comment \`@claude review\` and reply to its findings in a comment or review"
+          fi
+          gh pr comment "$PR_URL" --body \
+            "@$AUTHOR review requests were removed. Please $ASK, then request reviews again."
+
+  # Any human comment, review or review comment is a reply, except an `@claude review` trigger.
+  clear-needs-response:
+    if: >-
+      ((github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
+       github.event_name == 'pull_request_review' ||
+       github.event_name == 'pull_request_review_comment') &&
+      (github.event.comment.user.type || github.event.review.user.type) == 'User' &&
+      !contains(github.event.comment.body || github.event.review.body, '@claude review') &&
+      (contains(github.event.issue.labels.*.name, 'needs-response') ||
+       contains(github.event.pull_request.labels.*.name, 'needs-response'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove needs-response
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.issue.html_url || github.event.pull_request.html_url }}
+        run: gh pr edit "$PR_URL" --remove-label needs-response
