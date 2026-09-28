@@ -49,6 +49,55 @@ Runs when a PR is merged:
 3. Updates the Jira issue's `fixVersion`.
 4. Posts the PR description as a formatted comment on the Jira issue (with image support).
 
+### `reviewer-gate.yml`
+
+Holds human review requests until the automated Claude review has run and a human has replied to it.
+
+#### How it works
+
+1. The Claude review adds the `needs-response` label after every run.
+2. Any human comment, review or review comment removes `needs-response`. A push does not.
+3. When a human reviewer is requested:
+   - With no `claude-reviewed` or `claude-reviewed-again` label, the request is removed and the author is asked to run `@claude review`.
+   - With `needs-response`, the request is removed and the author is asked to reply.
+   - Otherwise the request stands.
+4. Removing `needs-response` by hand skips the reply check.
+
+#### Details
+
+- Dependabot PRs and bot reviewers are skipped.
+- A comment containing `@claude review` doesn't count as a reply.
+- A clean review still needs a reply, and any human can give it.
+- Each removed request posts a new comment asking the author.
+- Events that don't match skip at the job level, so they start no runner.
+- A comment posted in the seconds between the review finishing and `needs-response` being added is missed. Comment again or remove the label.
+
+#### Calling it
+
+A repository opts in with the caller below:
+
+```yaml
+# Use exactly these trigger types; reviewer-gate.yml doesn't check event actions.
+on:
+  pull_request:
+    types: [review_requested]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  reviewer-gate:
+    uses: macuject/.github/.github/workflows/reviewer-gate.yml@main
+```
+
+Its `code-review.yml` must also add the `needs-response` label to the PR after every review run.
+
 ## PR Requirements
 
 ### Jira ticket association
