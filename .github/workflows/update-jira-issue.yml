@@ -34,23 +34,45 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          # Extract issue key (first part before the first colon)
-          issue_key=$(echo "$PR_TITLE" | cut -d ':' -f1)
+          # Extract the key segment (first part before the first colon); may contain multiple '+'-joined keys
+          raw_key=$(echo "$PR_TITLE" | cut -d ':' -f1)
+
+          # Split on '+' to support multi-ticket PR titles (e.g. WA-1+WA-2: Summary)
+          IFS='+' read -ra candidate_keys <<< "$raw_key"
+
+          valid_keys=()
+          for key in "${candidate_keys[@]}"; do
+            if [[ "$key" =~ ^[A-Z]+-[0-9]+$ ]]; then
+              valid_keys+=("$key")
+            else
+              echo "Issue key '$key' does not match Jira key pattern. Skipping."
+            fi
+          done
+
+          if [ ${#valid_keys[@]} -eq 1 ]; then
+            issue_key="${valid_keys[0]}"
+          elif [ ${#valid_keys[@]} -gt 1 ]; then
+            joined=$(IFS=,; echo "${valid_keys[*]}")
+            issue_key="[${joined//,/, }]"
+          else
+            issue_key=""
+          fi
 
           # Extract project key (first part before the first '-')
           project_key=$(echo "$PR_TITLE" | cut -d '-' -f1)
 
           echo "issue_key=$issue_key" >> $GITHUB_OUTPUT
           echo "project_key=$project_key" >> $GITHUB_OUTPUT
+          echo "valid_key_count=${#valid_keys[@]}" >> $GITHUB_OUTPUT
 
       - name: Validate extracted issue key
         id: validate_key
         run: |
-          issue_key="${{ steps.extract_keys.outputs.issue_key }}"
-          if [[ "$issue_key" =~ ^[A-Z]+-[0-9]+$ ]]; then
+          valid_key_count="${{ steps.extract_keys.outputs.valid_key_count }}"
+          if [ "$valid_key_count" -gt 0 ]; then
             echo "valid=true" >> $GITHUB_OUTPUT
           else
-            echo "Issue key '$issue_key' does not match Jira key pattern. Skipping."
+            echo "No valid Jira issue key(s) found in PR title. Skipping."
             echo "valid=false" >> $GITHUB_OUTPUT
           fi
 
@@ -128,7 +150,7 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if [[ "$PR_TITLE" =~ ^\[?([A-Z]{2,4}-[0-9]{2,5}(,[[:space:]])?)+\]?:|^([A-Z]{2,4}-[0-9]{2,5}): ]]; then
+          if [[ "$PR_TITLE" =~ ^\[?([A-Z]{2,4}-[0-9]{2,5}([,+][[:space:]]?)?)+\]?:|^([A-Z]{2,4}-[0-9]{2,5}): ]]; then
             echo "PR title is valid"
           else
             echo "Invalid PR title format. It should start with a Jira issue key."
@@ -153,8 +175,30 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          # Extract issue key (first part before the first colon)
-          issue_key=$(echo "$PR_TITLE" | cut -d ':' -f1)
+          # Extract the key segment (first part before the first colon); may contain multiple '+'-joined keys
+          raw_key=$(echo "$PR_TITLE" | cut -d ':' -f1)
+
+          # Split on '+' to support multi-ticket PR titles (e.g. WA-1+WA-2: Summary)
+          IFS='+' read -ra candidate_keys <<< "$raw_key"
+
+          valid_keys=()
+          for key in "${candidate_keys[@]}"; do
+            if [[ "$key" =~ ^[A-Z]+-[0-9]+$ ]]; then
+              valid_keys+=("$key")
+            else
+              echo "Issue key '$key' does not match Jira key pattern. Skipping."
+            fi
+          done
+
+          if [ ${#valid_keys[@]} -eq 1 ]; then
+            issue_key="${valid_keys[0]}"
+          elif [ ${#valid_keys[@]} -gt 1 ]; then
+            joined=$(IFS=,; echo "${valid_keys[*]}")
+            issue_key="[${joined//,/, }]"
+          else
+            # Not a '+'-joined title (e.g. already bracketed '[WA-42, WA-23]' or unmatched); pass through unchanged
+            issue_key="$raw_key"
+          fi
 
           # Extract project key (first part before the first '-') and remove leading '[' if present (e.g. '[WA-42, WA-23]')
           project_key=$(echo "$issue_key" | cut -d '-' -f1 | sed 's/^\[//')
