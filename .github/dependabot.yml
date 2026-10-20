@@ -1,0 +1,11 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    # github-actions does not support semver-*-days cooldown keys
+    # (Dependabot schema rejects them). default-days applies to all
+    # updates in this ecosystem.
+    cooldown:
+      default-days: 7
