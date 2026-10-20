@@ -93,7 +93,7 @@ jobs:
           # iterate without word-splitting on JSON.
           PRS=$(gh pr list --repo "$REPO" --state open --author 'app/dependabot' \
             --limit 100 \
-            --json number,reviewDecision,mergeable,labels,updatedAt,headRefOid,reviewRequests \
+            --json number,mergeable,labels,updatedAt,headRefOid,reviewRequests \
             | jq -c '.[]')
 
           MERGE=()
@@ -102,7 +102,6 @@ jobs:
           while IFS= read -r pr; do
             [ -z "$pr" ] && continue
             NUM=$(jq -r '.number' <<<"$pr")
-            REVIEW=$(jq -r '.reviewDecision // ""' <<<"$pr")
             MERGEABLE=$(jq -r '.mergeable // ""' <<<"$pr")
             SHA=$(jq -r '.headRefOid' <<<"$pr")
             UPDATED=$(jq -r '.updatedAt' <<<"$pr")
@@ -119,6 +118,23 @@ jobs:
             # Latest conclusion of the CI workflow on the current head SHA.
             CONCL=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&event=pull_request" \
               --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\")] | sort_by(.run_started_at) | last | .conclusion // \"none\"")
+
+            # Standing verdicts, from the reviews API. `reviewDecision` cannot be
+            # used: it is derived from the branch ruleset's approval requirement,
+            # so under `required_approving_review_count: 0` it is null for every
+            # PR, approved or not, and this triage would queue nothing at all.
+            #
+            # This is triage, not enforcement — a queued PR is re-driven through
+            # dependabot-auto-merge.yml, which re-applies the authoritative gate
+            # (reviewer push access, dismissals, bump type, drift). So a plain
+            # "one verdict per reviewer" test is sufficient here; it deliberately
+            # does not duplicate that gate's eligibility checks.
+            REVIEW=$(gh api "repos/$REPO/pulls/$NUM/reviews" --paginate \
+              --jq '.[]
+                    | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
+                    | [(.user.login // "(unknown)"), .state] | @tsv' \
+              | awk -F'\t' '{ latest[$1] = $2 } END { for (u in latest) print latest[u] }' \
+              | sort -u | paste -sd, -) || REVIEW=""
 
             if [ "$REVIEW" = "APPROVED" ] && [ "$MERGEABLE" = "MERGEABLE" ] && [ "$CONCL" = "success" ]; then
               # Eligible but unmerged — the event path missed it. Let
