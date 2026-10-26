@@ -229,6 +229,7 @@ jobs:
       - name: Log release branch names
         run: echo "Release branch names ${{ steps.get_release_branch_names.outputs.release_branches }}"
 
+
       # Prevent dependency conflicts
       - name: Delete current_repo
         run: rm -rf current_repo
@@ -249,8 +250,9 @@ jobs:
         working-directory: reusable
 
       - name: Run Release Version script
+        id: release_version
         run: node reusable/.github/workflows/release-version.mjs
-        continue-on-error: true # If this script fails, still run the next step
+        continue-on-error: true # If this script fails, still run the next step; the final step reports the failure
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
@@ -270,6 +272,20 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           ORG_TEAM_MEMBERS: ${{ secrets.ORG_TEAM_MEMBERS }} # GitHub Personal Access Token that has 'repo' and 'workflow' rights
           REPO_NAME: ${{ github.event.repository.name }}
+
+      - name: Report fixVersion failure on the PR
+        if: steps.release_version.outcome == 'failure'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `The Jira fixVersion was **not** set for this PR's issue(s). See the "Run Release Version script" step in the [workflow run](${runUrl}) for the reason.\n\nFix the cause (e.g. create the next version in Jira) and re-run the job, or set the fixVersion in Jira by hand.`
+            });
+            core.setFailed('Jira fixVersion was not set');
 
   # On close without merge (any author)
   # - Post a comment reminding the author to manually update Jira if the work is abandoned
