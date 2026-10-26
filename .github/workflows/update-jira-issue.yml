@@ -95,7 +95,7 @@ jobs:
         id: get_release_branch_names
         run: |
           all_branches=$(git branch -r --format='%(refname:short)')
-          release_branches=$(echo "$all_branches" | grep -E 'release/.*0$' | tr '\n' ',' | sed 's/,$//')
+          release_branches=$(echo "$all_branches" | grep -E 'release/[0-9]+\.[0-9]+$' | tr '\n' ',' | sed 's/,$//')
           echo "release_branches=$release_branches" >> $GITHUB_OUTPUT
         working-directory: current_repo
 
@@ -229,6 +229,47 @@ jobs:
       - name: Log release branch names
         run: echo "Release branch names ${{ steps.get_release_branch_names.outputs.release_branches }}"
 
+      # A PR that lands another branch (e.g. a feature branch onto main) carries the merges of earlier PRs.
+      # Their issues ship with this merge, so they get this PR's fixVersion too.
+      - name: Collect issue keys from PRs merged into this branch
+        id: collect_keys
+        env:
+          TITLE_ISSUE_KEY: ${{ steps.extract_keys.outputs.issue_key }}
+          PROJECT_KEY: ${{ steps.extract_keys.outputs.project_key }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          # On any git failure fall back to the PR title's keys, so the remaining steps still run
+          merged_keys=""
+          # A release branch's fixes got their version when they merged into it; merging it back must not change that
+          if [[ ! "$HEAD_REF" =~ ^release/ ]] && git fetch -q origin "pull/${PR_NUMBER}/head"; then
+            # Only commits new to the base branch and in no final release tag (x.y.z) yet: issues that already
+            # shipped keep their fixVersion. Pre-release and other tags (x.y.z-alpha.N, backups) can sit on
+            # feature branches, so they don't count as shipped.
+            # Keys come from each merge's branch name and, on the line after it, the merged PR's title
+            merged_keys=$(git log --merges --format='%s%n%b' FETCH_HEAD --not "${MERGE_COMMIT_SHA}^1" --exclude='*-*' --tags='[0-9]*.[0-9]*.[0-9]*' \
+              | grep -A1 -E '^Merge pull request #[0-9]+ from ' \
+              | sed -nE -e 's#^Merge pull request \#[0-9]+ from [^/]+/([^/]+)/.*#\1#p' \
+                        -e 's#^\[?([A-Z]+-[0-9]+([,+] ?[A-Z]+-[0-9]+)*)\]?:.*#\1#p' \
+              | tr '+, ' '\n\n\n') || merged_keys=""
+          fi
+
+          all_keys=$( (echo "$TITLE_ISSUE_KEY" | tr -d '[] ' | tr ',' '\n'; echo "$merged_keys") \
+            | grep -E "^${PROJECT_KEY}-[0-9]+$" | sort -u) || all_keys=""
+          count=$(echo "$all_keys" | grep -c . || true)
+          echo "Issue keys for fixVersion (${count}): $(echo $all_keys)"
+
+          if [ "$count" -eq 1 ]; then
+            issue_key="$all_keys"
+          elif [ "$count" -gt 1 ]; then
+            issue_key="[$(echo "$all_keys" | paste -sd, | sed 's/,/, /g')]"
+          else
+            issue_key="$TITLE_ISSUE_KEY"
+          fi
+          echo "issue_key=$issue_key" >> $GITHUB_OUTPUT
+        working-directory: current_repo
+
       # Prevent dependency conflicts
       - name: Delete current_repo
         run: rm -rf current_repo
@@ -249,13 +290,14 @@ jobs:
         working-directory: reusable
 
       - name: Run Release Version script
+        id: release_version
         run: node reusable/.github/workflows/release-version.mjs
-        continue-on-error: true # If this script fails, still run the next step
+        continue-on-error: true # If this script fails, still run the next step; the final step reports the failure
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          ISSUE_KEY: ${{ steps.extract_keys.outputs.issue_key }}
+          ISSUE_KEY: ${{ steps.collect_keys.outputs.issue_key }}
           PROJECT_KEY: ${{ steps.extract_keys.outputs.project_key }}
           GITHUB_RELEASE_BRANCHES: ${{ steps.get_release_branch_names.outputs.release_branches }}
           PR_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
@@ -270,6 +312,20 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           ORG_TEAM_MEMBERS: ${{ secrets.ORG_TEAM_MEMBERS }} # GitHub Personal Access Token that has 'repo' and 'workflow' rights
           REPO_NAME: ${{ github.event.repository.name }}
+
+      - name: Report fixVersion failure on the PR
+        if: ${{ !cancelled() && steps.release_version.outcome == 'failure' }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `The Jira fixVersion was **not** set for this PR's issue(s). See the "Run Release Version script" step in the [workflow run](${runUrl}) for the reason.\n\nFix the cause (e.g. create the next version in Jira) and re-run the job, or set the fixVersion in Jira by hand.`
+            });
+            core.setFailed('Jira fixVersion was not set');
 
   # On close without merge (any author)
   # - Post a comment reminding the author to manually update Jira if the work is abandoned
