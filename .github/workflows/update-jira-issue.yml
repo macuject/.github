@@ -229,6 +229,44 @@ jobs:
       - name: Log release branch names
         run: echo "Release branch names ${{ steps.get_release_branch_names.outputs.release_branches }}"
 
+      # A PR that lands another branch (e.g. a feature branch onto main) carries the merges of earlier PRs.
+      # Their issues ship with this merge, so they get this PR's fixVersion too.
+      - name: Collect issue keys from PRs merged into this branch
+        id: collect_keys
+        env:
+          TITLE_ISSUE_KEY: ${{ steps.extract_keys.outputs.issue_key }}
+          PROJECT_KEY: ${{ steps.extract_keys.outputs.project_key }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          # On any git failure fall back to the PR title's keys, so the remaining steps still run
+          merged_keys=""
+          if git fetch -q origin "pull/${PR_NUMBER}/head"; then
+            # Only commits new to the base branch and in no final release tag (x.y.z) yet: issues that already
+            # shipped (e.g. release-branch fixes merged back into main) keep their fixVersion. Pre-release and
+            # other tags (x.y.z-alpha.N, backups) can sit on feature branches, so they don't count as shipped.
+            # Keys come from each merge's branch name and, on the line after it, the merged PR's title
+            merged_keys=$(git log --format='%s%n%b' FETCH_HEAD --not "${MERGE_COMMIT_SHA}^1" --exclude='*-*' --tags='[0-9]*.[0-9]*.[0-9]*' \
+              | grep -A1 -E '^Merge pull request #[0-9]+ from ' \
+              | sed -nE -e 's#^Merge pull request \#[0-9]+ from [^/]+/([^/]+)/.*#\1#p' \
+                        -e 's#^\[?([A-Z]+-[0-9]+([,+] ?[A-Z]+-[0-9]+)*)\]?:.*#\1#p' \
+              | tr '+, ' '\n\n\n') || merged_keys=""
+          fi
+
+          all_keys=$( (echo "$TITLE_ISSUE_KEY" | tr -d '[] ' | tr ',' '\n'; echo "$merged_keys") \
+            | grep -E "^${PROJECT_KEY}-[0-9]+$" | sort -u) || all_keys=""
+          count=$(echo "$all_keys" | grep -c . || true)
+          echo "Issue keys for fixVersion (${count}): $(echo $all_keys)"
+
+          if [ "$count" -eq 1 ]; then
+            issue_key="$all_keys"
+          elif [ "$count" -gt 1 ]; then
+            issue_key="[$(echo "$all_keys" | paste -sd, | sed 's/,/, /g')]"
+          else
+            issue_key="$TITLE_ISSUE_KEY"
+          fi
+          echo "issue_key=$issue_key" >> $GITHUB_OUTPUT
+        working-directory: current_repo
 
       # Prevent dependency conflicts
       - name: Delete current_repo
@@ -257,7 +295,7 @@ jobs:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          ISSUE_KEY: ${{ steps.extract_keys.outputs.issue_key }}
+          ISSUE_KEY: ${{ steps.collect_keys.outputs.issue_key }}
           PROJECT_KEY: ${{ steps.extract_keys.outputs.project_key }}
           GITHUB_RELEASE_BRANCHES: ${{ steps.get_release_branch_names.outputs.release_branches }}
           PR_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
