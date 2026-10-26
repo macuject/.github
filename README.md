@@ -46,7 +46,7 @@ Runs when a PR is merged:
 
 1. Validates the PR title contains a Jira issue key.
 2. Determines the correct `fixVersion` based on release branch structure. The next Jira version must exist before a release branch is cut.
-3. Updates the `fixVersion` of the PR's issues and of every issue whose PR was merged into the branch being landed (e.g. a feature branch), skipping work already in a final `x.y.z` tag.
+3. Updates the `fixVersion` of the PR's issues and of every issue whose PR was merged into the branch being landed (e.g. a feature branch), skipping work already in a final `x.y.z` tag and release branches merged back.
 4. Posts the PR description as a formatted comment on the Jira issue (with image support).
 5. Comments on the PR and fails the run if the `fixVersion` could not be set.
 
