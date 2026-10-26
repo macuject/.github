@@ -238,15 +238,17 @@ jobs:
           PROJECT_KEY: ${{ steps.extract_keys.outputs.project_key }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           # On any git failure fall back to the PR title's keys, so the remaining steps still run
           merged_keys=""
-          if git fetch -q origin "pull/${PR_NUMBER}/head"; then
+          # A release branch's fixes got their version when they merged into it; merging it back must not change that
+          if [[ ! "$HEAD_REF" =~ ^release/ ]] && git fetch -q origin "pull/${PR_NUMBER}/head"; then
             # Only commits new to the base branch and in no final release tag (x.y.z) yet: issues that already
-            # shipped (e.g. release-branch fixes merged back into main) keep their fixVersion. Pre-release and
-            # other tags (x.y.z-alpha.N, backups) can sit on feature branches, so they don't count as shipped.
+            # shipped keep their fixVersion. Pre-release and other tags (x.y.z-alpha.N, backups) can sit on
+            # feature branches, so they don't count as shipped.
             # Keys come from each merge's branch name and, on the line after it, the merged PR's title
-            merged_keys=$(git log --format='%s%n%b' FETCH_HEAD --not "${MERGE_COMMIT_SHA}^1" --exclude='*-*' --tags='[0-9]*.[0-9]*.[0-9]*' \
+            merged_keys=$(git log --merges --format='%s%n%b' FETCH_HEAD --not "${MERGE_COMMIT_SHA}^1" --exclude='*-*' --tags='[0-9]*.[0-9]*.[0-9]*' \
               | grep -A1 -E '^Merge pull request #[0-9]+ from ' \
               | sed -nE -e 's#^Merge pull request \#[0-9]+ from [^/]+/([^/]+)/.*#\1#p' \
                         -e 's#^\[?([A-Z]+-[0-9]+([,+] ?[A-Z]+-[0-9]+)*)\]?:.*#\1#p' \
@@ -312,7 +314,7 @@ jobs:
           REPO_NAME: ${{ github.event.repository.name }}
 
       - name: Report fixVersion failure on the PR
-        if: steps.release_version.outcome == 'failure'
+        if: ${{ !cancelled() && steps.release_version.outcome == 'failure' }}
         uses: actions/github-script@v8
         with:
           script: |
