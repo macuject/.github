@@ -9,6 +9,9 @@ const JIRA_API_TOKEN = process.env.JIRA_API_TOKEN;
 const PR_BASE_BRANCH = process.env.PR_BASE_BRANCH;
 let github_release_branches = process.env.GITHUB_RELEASE_BRANCHES;
 
+// release/1.2 and release/1.2.3 both belong to the 1.2 release line
+const RELEASE_BRANCH_PATTERN = /^release\/(\d+\.\d+)(?:\.\d+)?$/;
+
 import fetch from 'node-fetch';
 
 const fetchCurrentFixVersions = async (issueKey) => {
@@ -21,6 +24,10 @@ const fetchCurrentFixVersions = async (issueKey) => {
       'Accept': 'application/json'
     }
   });
+
+  if (!response.ok) {
+    throw new Error(`Could not read issue ${issueKey} (HTTP ${response.status})`);
+  }
 
   const json = await response.json();
   const fixVersions = json.fields.fixVersions;
@@ -74,7 +81,138 @@ function sortVersionsDescending(versions) {
   });
 }
 
-// Determine which fixVersion should be assigned to the Jira issue(s)
+// Determine which fixVersion the PR's Jira issue(s) should have. Throws when it can't be determined.
+async function determineCorrectFixVersion() {
+  // Get all unreleased fixVersions in the Jira project, retrieved in ascending order
+  const unreleasedJiraFixVersions = await fetchUnreleasedJiraFixVersions();
+  const releaseBranchMatch = PR_BASE_BRANCH.match(RELEASE_BRANCH_PATTERN);
+
+  let correctFixVersion = null;
+  if (releaseBranchMatch) {
+    // If the base branch is a release branch with a matching Jira fixVersion, use the release branch number as the correct fixVersion
+    // e.g. if the base branch is release/1.2, and there is a Jira fixVersion 1.2.0, use 1.2.0 as the correct fixVersion
+    const releaseBranchNumber = releaseBranchMatch[1] + '.0';
+    if (unreleasedJiraFixVersions.includes(releaseBranchNumber)) {
+      correctFixVersion = releaseBranchNumber;
+      console.log('Base branch is a release branch with a matching unreleased Jira fixVersion. Using the release branch number as the correct fixVersion.')
+    } else {
+      // Check if the fix version exists but is already released
+      const allFixVersions = await fetchAllJiraFixVersions();
+
+      // Find the fix version that matches the release branch number
+      const matchingFixVersion = allFixVersions.find(version => version.name === releaseBranchNumber);
+
+      if (!matchingFixVersion) {
+        console.log('Release branch number:', releaseBranchNumber)
+        console.log('All unreleased fixVersions in the Jira project:', unreleasedJiraFixVersions);
+        throw new Error('Release branch number not found in Jira fixVersions. Unclear how to proceed.');
+      }
+
+      // Check if this is the most recently released version
+      const isLatestReleasedVersion = allFixVersions
+        .filter(v => v.released && v.name.startsWith(releaseBranchNumber.substring(0, releaseBranchNumber.lastIndexOf('.'))))
+        .sort((a, b) => new Date(b.releaseDate) - new Date(a.releaseDate))[0]?.name === releaseBranchNumber;
+
+      if (!isLatestReleasedVersion) {
+        console.log('Release branch number:', releaseBranchNumber);
+        throw new Error('This is not the most recently released version. Unclear how to proceed.');
+      }
+
+      correctFixVersion = releaseBranchNumber;
+      console.log('Base branch is a release branch with the most recently released matching Jira fixVersion. Using the release branch number as the correct fixVersion.')
+    }
+  } else if (github_release_branches.length > 0) {
+    // Convert github_release_branches to an array if it's not already
+    const releaseBranches = Array.isArray(github_release_branches)
+      ? github_release_branches
+      : github_release_branches.split(',').map(branch => branch.trim());
+
+    console.log('Github release branches:', releaseBranches);
+
+    // Get the release branch numbers from the Github release branches
+    const githubReleaseBranchNumbers = sortVersionsDescending(releaseBranches);
+
+    console.log('All unreleased fixVersions in the Jira project:', unreleasedJiraFixVersions);
+    console.log('Sorted Github release branches:', githubReleaseBranchNumbers);
+
+    // Get the highest release branch number
+    let highestReleaseBranchNum = githubReleaseBranchNumbers[0].replace(/^(origin\/)?release\//, '');
+
+    // Find the lowest Jira version number that is higher than the highest release branch number
+    correctFixVersion = unreleasedJiraFixVersions.find(item => {
+      let itemParts = item.split('.').map(Number);
+      let branchParts = highestReleaseBranchNum.split('.').map(Number);
+      for (let i = 0; i < Math.max(itemParts.length, branchParts.length); i++) {
+        if ((itemParts[i] || 0) > (branchParts[i] || 0)) return true;
+        if ((itemParts[i] || 0) < (branchParts[i] || 0)) return false;
+      }
+      return false;
+    });
+
+    console.log('Highest release branch number:', highestReleaseBranchNum);
+    if (!correctFixVersion) {
+      throw new Error(`No unreleased Jira fixVersion is higher than release/${highestReleaseBranchNum}. Create the next version in Jira, then re-run this job.`);
+    }
+  } else {
+    // If there are no release branches, use the lowest Jira version number as the correct fixVersion
+    correctFixVersion = unreleasedJiraFixVersions[0];
+    console.log('No release branches found. Using the lowest unreleased Jira version number as the correct fixVersion.')
+    if (!correctFixVersion) {
+      throw new Error('No unreleased Jira fixVersion exists. Create the next version in Jira, then re-run this job.');
+    }
+  }
+
+  console.log('Correct fixVersion:', correctFixVersion);
+  return correctFixVersion;
+}
+
+async function updateIssueFixVersion(issueKey, correctFixVersion) {
+  console.log(`Processing issue: ${issueKey}`);
+  const currentFixVersionNames = await fetchCurrentFixVersions(issueKey);
+
+  if (currentFixVersionNames.length > 1) {
+    throw new Error('More than one fixVersion assigned to issue. This shouldn\'t be the case. Unclear how to proceed.');
+  }
+
+  const predictedFixVersion = currentFixVersionNames[0];
+  console.log('Currently assigned fixVersion for Jira ticket:', predictedFixVersion);
+
+  if (predictedFixVersion === correctFixVersion) {
+    console.log(`✅ Correct fixVersion is the same as the currently assigned fixVersion for issue ${issueKey}. No update needed.`);
+    return;
+  }
+
+  console.log(`Updating issue ${issueKey}...`);
+  const response = await fetch(`${JIRA_BASE_URL}/rest/api/3/issue/${issueKey}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Basic ${Buffer.from(
+        `${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}`
+      ).toString('base64')}`,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      update: {
+        fixVersions: [
+          {
+            set: [
+              {
+                name: correctFixVersion
+              }
+            ]
+          }
+        ]
+      }
+    })
+  });
+
+  if (response.status !== 204) {
+    throw new Error(`Error updating fixVersion for issue ${issueKey}: ${await response.text()}`);
+  }
+  console.log(`✅ Issue ${issueKey} updated with fixVersion:`, correctFixVersion);
+}
+
 async function fetchAndCompare() {
   try {
     // Validate ISSUE_KEY matches Jira key pattern before making API calls
@@ -98,138 +236,22 @@ async function fetchAndCompare() {
       issueKeys = [ISSUE_KEY];
     }
 
+    const correctFixVersion = await determineCorrectFixVersion();
+
+    // One bad issue (e.g. a mistyped key in a branch name) must not stop the rest being updated
+    const failedIssueKeys = [];
     for (const issueKey of issueKeys) {
-      console.log(`Processing issue: ${issueKey}`);
-      const currentFixVersionNames = await fetchCurrentFixVersions(issueKey);
-      let predictedFixVersion = null;
-
-      // return early if (currentFixVersionNames.length > 1)
-      //  i.e. if the issue has more than one fixVersion assigned to it
-      if (currentFixVersionNames.length > 1) {
-        console.error('More than one fixVersion assigned to issue. This shouldn\'t be the case. Unclear how to proceed, so returning early.');
-        process.exit(1);
-      } else {
-        predictedFixVersion = currentFixVersionNames[0];
+      try {
+        await updateIssueFixVersion(issueKey, correctFixVersion);
+      } catch (err) {
+        console.error(`❌ ${issueKey}: ${err.message}`);
+        failedIssueKeys.push(issueKey);
       }
+    }
 
-      // Get all unreleased fixVersions in the Jira project, retrieved in ascending order
-      let unreleasedJiraFixVersions = await fetchUnreleasedJiraFixVersions();
-
-      let correctFixVersion = null;
-      if (PR_BASE_BRANCH.includes('release')) {
-        // If the base branch is a release branch with a matching Jira fixVersion, use the release branch number as the correct fixVersion
-        // e.g. if the base branch is release/1.2, and there is a Jira fixVersion 1.2.0, use 1.2.0 as the correct fixVersion
-        const releaseBranchNumber = PR_BASE_BRANCH.match(/\d+\.\d+$/)[0] + '.0';
-        if (unreleasedJiraFixVersions.includes(releaseBranchNumber)) {
-          correctFixVersion = releaseBranchNumber;
-          console.log('Base branch is a release branch with a matching unreleased Jira fixVersion. Using the release branch number as the correct fixVersion.')
-          console.log('Currently assigned fixVersion for Jira ticket:', predictedFixVersion);
-          console.log('Correct fixVersion:', correctFixVersion);
-        } else {
-          // Check if the fix version exists but is already released
-          const allFixVersions = await fetchAllJiraFixVersions();
-
-          // Find the fix version that matches the release branch number
-          const matchingFixVersion = allFixVersions.find(version => version.name === releaseBranchNumber);
-
-          if (matchingFixVersion) {
-            // Check if this is the most recently released version
-            const isLatestReleasedVersion = allFixVersions
-              .filter(v => v.released && v.name.startsWith(releaseBranchNumber.substring(0, releaseBranchNumber.lastIndexOf('.'))))
-              .sort((a, b) => new Date(b.releaseDate) - new Date(a.releaseDate))[0]?.name === releaseBranchNumber;
-
-            if (isLatestReleasedVersion) {
-              correctFixVersion = releaseBranchNumber;
-              console.log('Base branch is a release branch with the most recently released matching Jira fixVersion. Using the release branch number as the correct fixVersion.')
-              console.log('Currently assigned fixVersion for Jira ticket:', predictedFixVersion);
-              console.log('Correct fixVersion:', correctFixVersion);
-            } else {
-              console.log('Release branch number:', releaseBranchNumber);
-              console.log('This is not the most recently released version. Unclear how to proceed, so returning early.');
-              process.exit(1);
-            }
-          } else {
-            console.log('Release branch number:', releaseBranchNumber)
-            console.log('All unreleased fixVersions in the Jira project:', unreleasedJiraFixVersions);
-            console.error('Release branch number not found in Jira fixVersions. Unclear how to proceed, so returning early.');
-            process.exit(1);
-          }
-        }
-      } else if (github_release_branches.length > 0) {
-        // Convert github_release_branches to an array if it's not already
-        const releaseBranches = Array.isArray(github_release_branches)
-          ? github_release_branches
-          : github_release_branches.split(',').map(branch => branch.trim());
-
-        console.log('Github release branches:', releaseBranches);
-
-        // Get the release branch numbers from the Github release branches
-        const githubReleaseBranchNumbers = sortVersionsDescending(releaseBranches);
-
-        console.log('All unreleased fixVersions in the Jira project:', unreleasedJiraFixVersions);
-        console.log('Sorted Github release branches:', githubReleaseBranchNumbers);
-        console.log('Currently assigned fixVersion for Jira ticket:', predictedFixVersion);
-
-        // Get the highest release branch number
-        let highestReleaseBranchNum = githubReleaseBranchNumbers[0].replace(/^(origin\/)?release\//, '');
-
-        // Find the lowest Jira version number that is higher than the highest release branch number
-        correctFixVersion = unreleasedJiraFixVersions.find(item => {
-          let itemParts = item.split('.').map(Number);
-          let branchParts = highestReleaseBranchNum.split('.').map(Number);
-          for (let i = 0; i < Math.max(itemParts.length, branchParts.length); i++) {
-            if ((itemParts[i] || 0) > (branchParts[i] || 0)) return true;
-            if ((itemParts[i] || 0) < (branchParts[i] || 0)) return false;
-          }
-          return false;
-        });
-
-        console.log('Highest release branch number:', highestReleaseBranchNum);
-        console.log('Correct fixVersion:', correctFixVersion);
-      } else {
-        // If there are no release branches, use the lowest Jira version number as the correct fixVersion
-        correctFixVersion = unreleasedJiraFixVersions[0];
-        console.log('No release branches found. Using the lowest unreleased Jira version number as the correct fixVersion.')
-        console.log('Correct fixVersion:', correctFixVersion);
-      }
-
-      // If the correct fixVersion is not the same as the currently assigned fixVersion, update the issue
-      if (predictedFixVersion !== correctFixVersion) {
-        console.log(`Updating issue ${issueKey}...`);
-        const response = await fetch(`${JIRA_BASE_URL}/rest/api/3/issue/${issueKey}`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Basic ${Buffer.from(
-              `${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}`
-            ).toString('base64')}`,
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            update: {
-              fixVersions: [
-                {
-                  set: [
-                    {
-                      name: correctFixVersion
-                    }
-                  ]
-                }
-              ]
-            }
-          })
-        });
-
-        // Check the response status
-        if (response.status === 204) { // Check for the appropriate successful status code here
-          console.log(`✅ Issue ${issueKey} updated with fixVersion:`, correctFixVersion);
-        } else {
-          console.error(`Error updating fixVersion for issue ${issueKey}`, await response.text());
-          process.exit(1);
-        }
-      } else {
-        console.log(`✅ Correct fixVersion is the same as the currently assigned fixVersion for issue ${issueKey}. No update needed.`);
-      }
+    if (failedIssueKeys.length > 0) {
+      console.error(`fixVersion not set for: ${failedIssueKeys.join(', ')}`);
+      process.exit(1);
     }
   } catch (err) {
     console.error(err);
